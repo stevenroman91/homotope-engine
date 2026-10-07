@@ -1,0 +1,93 @@
+{
+  "$comment": "Seuils de `npm run eval -- --check`. Posés par T06, resserrés par T07 puis par T08 aux valeurs atteintes (SSIM : valeur − 10 % de l’écart à 1, jamais sous la cible du ticket ; erreur moyenne × 1,1 ; nœuds/octets × 1,3) ; 0 liseré partout, topologie exacte partout sauf `badge` (limite connue, README). On ne les élargit JAMAIS (test « seuils T08 »). T33 : `line-drawing` (centre-ligne) posé par la même règle sur le prototype mesuré. meanErrorMax : distance RGB euclidienne moyenne (0..441).",
+  "fixtures": {
+    "logo-flat": {
+      "ssimMin": 0.982,
+      "meanErrorMax": 1.58,
+      "seamsMax": 0,
+      "holesExact": true,
+      "nodesMax": 45,
+      "bytesMax": 985
+    },
+    "logo-aa": {
+      "ssimMin": 0.991,
+      "meanErrorMax": 0.99,
+      "seamsMax": 0,
+      "holesExact": true,
+      "nodesMax": 45,
+      "bytesMax": 987
+    },
+    "logo-jpeg": {
+      "ssimMin": 0.974,
+      "meanErrorMax": 2.7,
+      "seamsMax": 0,
+      "holesExact": true,
+      "nodesMax": 43,
+      "bytesMax": 907
+    },
+    "text": {
+      "ssimMin": 0.97,
+      "meanErrorMax": 3.69,
+      "seamsMax": 0,
+      "holesExact": true,
+      "nodesMax": 169,
+      "bytesMax": 3241
+    },
+    "pixel-art": {
+      "ssimMin": 0.9999,
+      "meanErrorMax": 0,
+      "seamsMax": 0,
+      "holesExact": true,
+      "nodesMax": 112,
+      "bytesMax": 730
+    },
+    "illustration": {
+      "ssimMin": 0.954,
+      "meanErrorMax": 8.57,
+      "seamsMax": 0,
+      "holesExact": true,
+      "nodesMax": 166,
+      "bytesMax": 3790
+    },
+    "photo": {
+      "ssimMin": 0.775,
+      "meanErrorMax": 11.66,
+      "seamsMax": 0,
+      "holesExact": true,
+      "nodesMax": 1688,
+      "bytesMax": 24836
+    },
+    "alpha": {
+      "ssimMin": 0.988,
+      "meanErrorMax": 1.73,
+      "seamsMax": 0,
+      "holesExact": true,
+      "nodesMax": 58,
+      "bytesMax": 1536
+    },
+    "badge": {
+      "ssimMin": 0.947,
+      "meanErrorMax": 9.47,
+      "seamsMax": 0,
+      "holesExact": false,
+      "nodesMax": 215,
+      "bytesMax": 2946
+    },
+    "icon-64": {
+      "ssimMin": 0.939,
+      "meanErrorMax": 13.53,
+      "seamsMax": 0,
+      "holesExact": true,
+      "nodesMax": 115,
+      "bytesMax": 2832
+    },
+    "line-drawing": {
+      "ssimMin": 0.98,
+      "meanErrorMax": 3.24,
+      "seamsMax": 0,
+      "holesExact": true,
+      "nodesMax": 123,
+      "bytesMax": 3723
+    }
+  }
+}

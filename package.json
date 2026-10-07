@@ -1,0 +1,102 @@
+{
+  "name": "@homotope/engine",
+  "version": "0.1.0",
+  "description": "Raster-to-vector engine (PNG/JPEG → SVG, DXF, PDF, EPS, centerline) in pure TypeScript: no DOM, no dependencies, runs in a Web Worker and in Node.",
+  "keywords": [
+    "vectorize",
+    "vectorizer",
+    "vectorization",
+    "svg",
+    "raster-to-vector",
+    "image-tracing",
+    "bitmap-to-vector",
+    "png-to-svg",
+    "jpg-to-svg",
+    "dxf",
+    "pdf",
+    "eps",
+    "centerline",
+    "potrace-alternative",
+    "web-worker",
+    "typescript"
+  ],
+  "homepage": "https://homotope.app",
+  "bugs": {
+    "url": "https://github.com/stevenroman91/homotope-engine/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/stevenroman91/homotope-engine.git"
+  },
+  "license": "MIT",
+  "type": "module",
+  "sideEffects": false,
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./export": {
+      "types": "./dist/export/index.d.ts",
+      "default": "./dist/export/index.js"
+    },
+    "./cutcheck": {
+      "types": "./dist/cutcheck/index.d.ts",
+      "default": "./dist/cutcheck/index.js"
+    },
+    "./node": {
+      "types": "./dist/image/codec-node.d.ts",
+      "default": "./dist/image/codec-node.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
+  "engines": {
+    "node": ">=22.18"
+  },
+  "peerDependencies": {
+    "jpeg-js": "^0.4.4",
+    "pngjs": "^7.0.0"
+  },
+  "peerDependenciesMeta": {
+    "jpeg-js": {
+      "optional": true
+    },
+    "pngjs": {
+      "optional": true
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json && node scripts/fix-dts.mjs",
+    "lint": "eslint . && prettier --check .",
+    "format": "prettier --write .",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run",
+    "eval": "tsx scripts/eval.ts",
+    "fixtures": "tsx scripts/gen-fixtures.ts",
+    "prepack": "npm run build"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@resvg/resvg-js": "^2.6.2",
+    "@types/node": "^26.6.4",
+    "@types/pngjs": "^6.0.5",
+    "eslint": "^10.12.0",
+    "fflate": "^0.8.3",
+    "globals": "^17.13.0",
+    "jpeg-js": "^0.4.4",
+    "pngjs": "^7.0.0",
+    "prettier": "^3.9.9",
+    "tsx": "^4.23.15",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.71.0",
+    "vitest": "^5.0.3"
+  }
+}

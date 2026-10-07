@@ -1,0 +1,21 @@
+{
+  "$comment": "Cas d'évaluation (T06) : fixture de test/fixtures → préréglage → surcharges d'options.",
+  "cases": [
+    { "name": "logo-flat", "fixture": "logo-flat.png", "preset": "logo" },
+    { "name": "logo-aa", "fixture": "logo-aa.png", "preset": "logo" },
+    { "name": "logo-jpeg", "fixture": "logo-jpeg.jpg", "preset": "logo" },
+    { "name": "text", "fixture": "text.png", "preset": "line-art" },
+    { "name": "pixel-art", "fixture": "pixel-art.png", "preset": "pixel-art" },
+    { "name": "illustration", "fixture": "illustration.png", "preset": "illustration" },
+    { "name": "photo", "fixture": "photo.png", "preset": "photo" },
+    { "name": "alpha", "fixture": "alpha.png", "preset": "logo" },
+    { "name": "badge", "fixture": "badge.png", "preset": "logo" },
+    { "name": "icon-64", "fixture": "icon-64.png", "preset": "logo" },
+    {
+      "name": "line-drawing",
+      "fixture": "line-drawing.png",
+      "preset": "centerline",
+      "options": { "export": { "backgroundRect": true } }
+    }
+  ]
+}

@@ -1,0 +1,6 @@
+dist/
+node_modules/
+coverage/
+.eval-out/
+test/fixtures/*.png
+test/fixtures/*.jpg
