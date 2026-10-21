@@ -9,14 +9,25 @@
  * coin, une jonction. D'où le critère : distance euclidienne < d ET distance le long des lignes
  * de découpe (géodésique, réseau `network.ts`) > `GEODESIC_FACTOR`·d. Un coin d'angle θ n'est
  * signalé que si sin(θ/2) < 1/3 (θ < 39°) : une pointe que l'outil émousse sur plus de d.
+ *
+ * T63 — Pointes et filets : un cas n'est SIGNALÉ que si la bande trop étroite PERSISTE sur au
+ * moins `minThinMm` (le diamètre par défaut) et n'est pas une pointe. Une pointe est une bande
+ * dont les deux flancs se rejoignent en un sommet A (chemin le long des lignes de découpe) et
+ * dont la largeur croît PROPORTIONNELLEMENT à la distance à A (un coin, quel que soit son angle) :
+ * l'outil l'arrondit, ce n'est pas un défaut — à condition que la base du coin DÉPASSE l'outil
+ * (une aiguille plus fine que l'outil sur toute sa longueur est un filet). Un filet (largeur à peu près constante, même
+ * terminé en pointe, ou d'une forme entière plus fine que l'outil) reste signalé.
  */
-import { MM_PER_PX } from '../export/polyline.ts';
+import { MAX_MM_PER_PX, MIN_MM_PER_PX, MM_PER_PX } from '../export/polyline.ts';
 import { bboxOf, polygonArea, type CutGeometry, type CutPolyline } from './geometry.ts';
 import { SegmentGrid } from './grid.ts';
 import { buildNetwork, mergedPolylines, segLength, type Network } from './network.ts';
 import {
   CUT_ISSUE_KINDS,
   DEFAULT_ISLAND_MM2,
+  MAX_THIN_MM,
+  MIN_THIN_MM,
+  isLineArt,
   DEFAULT_MAX_NODES,
   DEFAULT_TOOL_MM,
   MAX_ISLAND_MM2,
@@ -45,6 +56,8 @@ export interface CutCheckOptions {
   islandMm2?: number;
   /** Nœuds au-delà desquels un contour est signalé, 1 000 par défaut. */
   maxNodes?: number;
+  /** T63 — Longueur minimale d'un filet signalé (mm), le diamètre de l'outil par défaut. */
+  minThinMm?: number;
   /** Échelle de l'export (mm par px), `MM_PER_PX` (1 px = 1 pt) par défaut. */
   mmPerPx?: number;
   /** Le DXF fusionnera les frontières communes : aucun segment n'y est découpé deux fois. */
@@ -73,6 +86,86 @@ export const GEODESIC_FACTOR = 3;
  * paires : un outil large (10 mm) multiplie les voisins et les recherches.
  */
 export const DEFAULT_WORK_BUDGET = 30_000_000;
+/**
+ * T63 — Coin : le profil de la bande (largeur w à la distance s du sommet A) est ajusté par une
+ * droite w = a + b·s (moindres carrés). Un coin a une ordonnée à l'origine nulle (w ∝ s) ; un
+ * filet (w constant), une feuille (w qui retombe) ou une bande sans sommet, non. Pointe : b > 0
+ * et |a| ≤ `TIP_WEDGE` × largeur moyenne.
+ */
+export const TIP_WEDGE = 0.35;
+
+/**
+ * T63 — Le profil [x, y, w] × n croît-il proportionnellement à la distance à (apexX, apexY) ? Un
+ * échantillon mesure l'écart à UN segment d'en face, parfois plus que la largeur réelle : le
+ * profil retenu est l'enveloppe BASSE, la plus petite largeur par tranche de distance `bin`.
+ */
+export function isWedge(
+  samples: ArrayLike<number>,
+  apexX: number,
+  apexY: number,
+  bin: number,
+): boolean {
+  const low = lowProfile(samples, apexX, apexY, bin);
+  let n = 0;
+  let ss = 0;
+  let sw = 0;
+  let sss = 0;
+  let ssw = 0;
+  for (const [sv, w] of low.values()) {
+    n++;
+    ss += sv;
+    sw += w;
+    sss += sv * sv;
+    ssw += sv * w;
+  }
+  if (n < 2) return false;
+  const ms = ss / n;
+  const mw = sw / n;
+  const vs = sss / n - ms * ms;
+  // Échantillons tous à la même distance du sommet : aucune pente mesurable, pas un coin.
+  if (!(vs > 1e-12 * (1 + ms * ms))) return false;
+  const b = (ssw / n - ms * mw) / vs;
+  const a = mw - b * ms;
+  return b > 0 && Math.abs(a) <= TIP_WEDGE * mw;
+}
+
+/** Enveloppe basse d'un profil : par tranche de distance `bin` à (x0, y0), [distance, largeur]. */
+function lowProfile(
+  samples: ArrayLike<number>,
+  x0: number,
+  y0: number,
+  bin: number,
+): [number, number][] {
+  const low = new Map<number, [number, number]>();
+  for (let k = 0; k + 2 < samples.length; k += 3) {
+    const sv = Math.hypot(samples[k]! - x0, samples[k + 1]! - y0);
+    const w = samples[k + 2]!;
+    const key = Math.floor(sv / bin);
+    const cur = low.get(key);
+    if (!cur || w < cur[1]) low.set(key, [sv, w]);
+  }
+  return [...low.values()];
+}
+
+/**
+ * T63 — Largeur TYPIQUE d'un filet : médiane de l'enveloppe basse de son profil (un filet terminé
+ * en pointe se dit par sa largeur courante, pas par celle de son bout).
+ */
+export function typicalWidth(samples: ArrayLike<number>, bin: number): number {
+  if (samples.length < 3) return 0;
+  const ws = lowProfile(samples, samples[0]!, samples[1]!, bin)
+    .map((p) => p[1])
+    .sort((a, b) => a - b);
+  return ws[(ws.length - 1) >> 1]!;
+}
+/** T63 — Largeur MAXIMALE d'un profil [x, y, w] × n (0 s'il est vide). */
+export function maxWidth(samples: ArrayLike<number>): number {
+  let m = 0;
+  for (let k = 2; k < samples.length; k += 3) if (samples[k]! > m) m = samples[k]!;
+  return m;
+}
+/** T63 — Largeur courante d'un filet signalé : sous 95 % du diamètre de l'outil. */
+export const THIN_MARGIN = 0.95;
 /** Cas de détails fins retenus au plus avant regroupement. */
 const MAX_THIN_CANDIDATES = 400_000;
 /** Sommets explorés au plus par une recherche géodésique (au-delà : considérés reliés). */
@@ -115,11 +208,13 @@ type CutParams = Required<Omit<CutCheckOptions, 'workBudget' | 'budgetMs' | 'dea
 
 /** Paramètres effectifs (bornés), partagés par l'analyse et la simplification. */
 export function cutParams(o: CutCheckOptions): CutParams {
+  const toolMm = clampParam(o.toolMm, DEFAULT_TOOL_MM, MIN_TOOL_MM, MAX_TOOL_MM);
   return {
-    toolMm: clampParam(o.toolMm, DEFAULT_TOOL_MM, MIN_TOOL_MM, MAX_TOOL_MM),
+    toolMm,
+    minThinMm: clampParam(o.minThinMm, toolMm, MIN_THIN_MM, MAX_THIN_MM),
     islandMm2: clampParam(o.islandMm2, DEFAULT_ISLAND_MM2, MIN_ISLAND_MM2, MAX_ISLAND_MM2),
     maxNodes: Math.round(clampParam(o.maxNodes, DEFAULT_MAX_NODES, MIN_MAX_NODES, MAX_MAX_NODES)),
-    mmPerPx: clampParam(o.mmPerPx, MM_PER_PX, 1e-4, 1e3),
+    mmPerPx: clampParam(o.mmPerPx, MM_PER_PX, MIN_MM_PER_PX, MAX_MM_PER_PX),
     mergeShared: o.mergeShared === true,
   };
 }
@@ -186,17 +281,34 @@ export function analyzeCut(geom: CutGeometry, options: CutCheckOptions = {}): Cu
   const net = buildNetwork(geom);
 
   // --- Doubles découpes : segments identiques (après nœuds en T) --------------------------
+  // T63 — Un aller-retour (une même polyligne repasse sur ses pas) se compte par TRONÇON
+  // continu, pas par polyligne ; un tronçon plus court que l'outil est le bout d'une pointe dont
+  // les flancs se confondent : l'outil ne le distingue pas, ce n'est pas une double découpe.
   if (!prm.mergeShared) {
-    const pairs = new Map<
-      number,
-      { a: number; b: number; len: number; opposite: boolean; box: Acc }
-    >();
+    type Pair = { a: number; b: number; len: number; opposite: boolean; box: Acc };
+    const pairs = new Map<number, Pair>();
     const np = geom.polylines.length;
+    // Tronçons d'aller-retour : sommets reliés par leurs segments doublés (union-find).
+    const vParent = new Map<number, number>();
+    const vFind = (v: number): number => {
+      let r = v;
+      while (vParent.has(r) && vParent.get(r) !== r) r = vParent.get(r)!;
+      vParent.set(v, r);
+      return r;
+    };
+    const selfDups: number[] = [];
     for (let s = 0; s < net.ns; s++) {
       const f = net.dupOf[s]!;
       if (f < 0) continue;
       const a = net.spoly[f]!;
       const b = net.spoly[s]!;
+      if (a === b) {
+        selfDups.push(s);
+        const ra = vFind(net.sa[s]!);
+        const rb = vFind(net.sb[s]!);
+        if (ra !== rb) vParent.set(ra, rb);
+        continue;
+      }
       const key = a * np + b;
       let g = pairs.get(key);
       if (!g) {
@@ -208,17 +320,35 @@ export function analyzeCut(geom: CutGeometry, options: CutCheckOptions = {}): Cu
       grow(g.box, net.vx[net.sa[s]!]!, net.vy[net.sa[s]!]!);
       grow(g.box, net.vx[net.sb[s]!]!, net.vy[net.sb[s]!]!);
     }
-    for (const g of pairs.values()) {
+    const runs = new Map<number, Pair>();
+    for (const s of selfDups) {
+      const f = net.dupOf[s]!;
+      const p = net.spoly[s]!;
+      const r = vFind(net.sa[s]!);
+      let g = runs.get(r);
+      if (!g) {
+        g = { a: p, b: p, len: 0, opposite: true, box: newAcc() };
+        runs.set(r, g);
+      }
+      g.len += segLength(net, s);
+      if (net.sa[s] === net.sa[f]) g.opposite = false;
+      grow(g.box, net.vx[net.sa[s]!]!, net.vy[net.sa[s]!]!);
+      grow(g.box, net.vx[net.sb[s]!]!, net.vy[net.sb[s]!]!);
+    }
+    const kept = [...runs.values()].filter((g) => !(g.opposite && g.len < d));
+    for (const g of [...pairs.values(), ...kept]) {
       const ia = geom.polylines[g.a]!.item;
       const ib = geom.polylines[g.b]!.item;
       const len = fmtMm(mm(g.len));
       const shared = g.opposite && g.a !== g.b;
+      const retrace = g.a === g.b && g.opposite;
       issues.push({
         kind: 'overlap',
         severity: shared ? 'info' : 'blocking',
         box: boxOf(...g.box),
         value: r3(mm(g.len)),
         ...(ia === ib ? { color: colorOfItem(ia) } : {}),
+        ...(retrace && !isStroke(geom.polylines[g.a]!) ? { fixable: true as const } : {}),
         message:
           g.a === g.b
             ? `Tracé parcouru deux fois sur ${len} mm (aller-retour) : double découpe.`
@@ -310,8 +440,31 @@ export function analyzeCut(geom: CutGeometry, options: CutCheckOptions = {}): Cu
           const reach = Math.min(lu, lw, sinHalf > 0 ? d / (2 * sinHalf) : Infinity);
           const x0 = net.vx[v]!;
           const y0 = net.vy[v]!;
+          // Portions (paramètres de chaque segment, de `sa` vers `sb`) depuis le sommet v.
+          const ri = reach / lu;
+          const rj = reach / lw;
           thin.push({
             w: GEODESIC_FACTOR * d * sinHalf,
+            apex: v,
+            // Largeur 2·s·sin(θ/2) à la distance s du sommet : à mi-portée et au bout.
+            samples: [
+              x0 + (ux / lu) * (reach / 2),
+              y0 + (uy / lu) * (reach / 2),
+              reach * sinHalf,
+              x0 + (ux / lu) * reach,
+              y0 + (uy / lu) * reach,
+              2 * reach * sinHalf,
+              x0 + (wx / lw) * (reach / 2),
+              y0 + (wy / lw) * (reach / 2),
+              reach * sinHalf,
+              x0 + (wx / lw) * reach,
+              y0 + (wy / lw) * reach,
+              2 * reach * sinHalf,
+            ],
+            i,
+            j,
+            ti: v === ai ? [0, ri] : [1 - ri, 1],
+            tj: v === aj ? [0, rj] : [1 - rj, 1],
             seg: [
               x0,
               y0,
@@ -368,11 +521,30 @@ export function analyzeCut(geom: CutGeometry, options: CutCheckOptions = {}): Cu
         // Distance entre segments sans croisement : la plus courte des 4 extrémités.
         segSegClosest(ax[i]!, ay[i]!, bx[i]!, by[i]!, ax[j]!, ay[j]!, bx[j]!, by[j]!, near);
         const best = near[0]!;
-        const p1x = near[1]!;
-        const p1y = near[2]!;
-        const p2x = near[3]!;
-        const p2y = near[4]!;
+        let p1x = near[1]!;
+        let p1y = near[2]!;
+        let p2x = near[3]!;
+        let p2y = near[4]!;
         if (!(best < d) || best <= CONTACT_EPS) continue;
+        // T63 — Segments parallèles : toutes les paires de leur partie commune sont à la même
+        // distance ; la paire testée est celle du MILIEU, pas une extrémité (un barreau isolé plus
+        // fin que l'outil se rejoint à son bout : depuis le bout, il paraissait « relié »).
+        if (Math.abs(dxi * dyj - dyi * dxj) <= 1e-9 * li * lj) {
+          const ta = closestT(ax[j]!, ay[j]!, ax[i]!, ay[i]!, bx[i]!, by[i]!);
+          const tb = closestT(bx[j]!, by[j]!, ax[i]!, ay[i]!, bx[i]!, by[i]!);
+          const tm = (Math.min(ta, tb) + Math.max(ta, tb)) / 2;
+          const mx = ax[i]! + tm * dxi;
+          const my = ay[i]! + tm * dyi;
+          const u = closestT(mx, my, ax[j]!, ay[j]!, bx[j]!, by[j]!);
+          const qx = ax[j]! + u * dxj;
+          const qy = ay[j]! + u * dyj;
+          if (Math.hypot(qx - mx, qy - my) <= best + CONTACT_EPS) {
+            p1x = mx;
+            p1y = my;
+            p2x = qx;
+            p2y = qy;
+          }
+        }
         if (thin.length >= MAX_THIN_CANDIDATES) {
           truncated = true;
           continue;
@@ -384,11 +556,45 @@ export function analyzeCut(geom: CutGeometry, options: CutCheckOptions = {}): Cu
         }
         if (linked) continue;
         // Portions des deux segments à moins de d l'une de l'autre : la boîte du cas.
-        const pi = nearPortion(ax[i]!, ay[i]!, bx[i]!, by[i]!, ax[j]!, ay[j]!, bx[j]!, by[j]!, d);
-        const pj = nearPortion(ax[j]!, ay[j]!, bx[j]!, by[j]!, ax[i]!, ay[i]!, bx[i]!, by[i]!, d);
+        const ti = nearPortion(ax[i]!, ay[i]!, bx[i]!, by[i]!, ax[j]!, ay[j]!, bx[j]!, by[j]!, d);
+        const tj = nearPortion(ax[j]!, ay[j]!, bx[j]!, by[j]!, ax[i]!, ay[i]!, bx[i]!, by[i]!, d);
+        const at = (s: number, t: number): [number, number] => [
+          ax[s]! + t * (bx[s]! - ax[s]!),
+          ay[s]! + t * (by[s]! - ay[s]!),
+        ];
+        // Profil : la paire la plus proche ; pour deux segments longs (parallèles ou en coin),
+        // aussi les extrémités des portions et leur écart à l'autre droite.
+        const samples: number[] = [(p1x + p2x) / 2, (p1y + p2y) / 2, best];
+        for (const [s, t, o] of [
+          [i, ti[0], j],
+          [i, ti[1], j],
+          [j, tj[0], i],
+          [j, tj[1], i],
+        ] as const) {
+          const [px, py] = at(s, t);
+          const u = closestT(px, py, ax[o]!, ay[o]!, bx[o]!, by[o]!);
+          const gx = px - ax[o]! - u * (bx[o]! - ax[o]!);
+          const gy = py - ay[o]! - u * (by[o]! - ay[o]!);
+          samples.push(px, py, Math.min(d, Math.max(best, Math.hypot(gx, gy))));
+        }
         thin.push({
           w: best,
-          seg: [...pi, ...pj, p1x, p1y, p2x, p2y],
+          apex: -1,
+          samples,
+          i,
+          j,
+          ti,
+          tj,
+          seg: [
+            ...at(i, ti[0]),
+            ...at(i, ti[1]),
+            ...at(j, tj[0]),
+            ...at(j, tj[1]),
+            p1x,
+            p1y,
+            p2x,
+            p2y,
+          ],
           ia: geom.polylines[net.spoly[i]!]!.item,
           ib: geom.polylines[net.spoly[j]!]!.item,
           stroke: strokeSeg(i) && strokeSeg(j),
@@ -435,32 +641,93 @@ export function analyzeCut(geom: CutGeometry, options: CutCheckOptions = {}): Cu
       if (copy.color !== colorOfItem(pl.item)) delete copy.color;
       return;
     }
+    // T63 — Dimensions plutôt qu'une aire arrondie à « 0 mm² » : « 0,3 × 0,1 mm ».
+    const size = { width: r3(mm(x1 - x0)), height: r3(mm(y1 - y0)) };
     const issue: CutIssue = {
       kind: 'island',
       severity: 'check',
       box: boxOf(x0, y0, x1, y1),
       value: r3(area * prm.mmPerPx * prm.mmPerPx),
+      size,
+      fixable: true,
       color: colorOfItem(pl.item),
-      message: `Petit îlot de ${fmtMm(area * prm.mmPerPx * prm.mmPerPx)} mm² (seuil ${fmtMm(prm.islandMm2)} mm²) : il risque de se perdre ou de bouger pendant la découpe.`,
+      message: `Petit îlot de ${fmtMm(size.width)} × ${fmtMm(size.height)} mm (${fmtMm(area * prm.mmPerPx * prm.mmPerPx)} mm², seuil ${fmtMm(prm.islandMm2)} mm²) : il risque de se perdre ou de bouger pendant la découpe.`,
     };
     seenIslands.set(key, issue);
     issues.push(issue);
   });
 
-  // Détails fins : cas voisins (à moins de d) regroupés en un seul.
-  for (const g of clusterThin(thin, d)) {
-    const w = fmtMm(mm(g.w));
+  // Détails fins : cas voisins (à moins de d) regroupés en un seul ; T63 : signalés seulement
+  // s'ils PERSISTENT (longueur ≥ minThin) et ne sont pas la portion terminale d'une pointe.
+  const minThinPx = prm.minThinMm / prm.mmPerPx;
+  const tips = new Geodesic(net, adjacency, budget);
+  let thinFillLen = 0;
+  for (const g of clusterThin(thin, d, net)) {
+    if (g.len < minThinPx) continue;
+    // Sommet A : celui d'un cas jointif (le plus étroit), sinon le milieu du plus court chemin
+    // entre les deux flancs du cas le plus étroit, au plus à la longueur de la bande (aller et
+    // retour) et la marge du critère géodésique.
+    let apex = -1;
+    let narrow = -1;
+    for (const k of g.members) {
+      const t = thin[k]!;
+      if (t.apex >= 0 && (apex < 0 || t.w < thin[narrow]!.w)) {
+        apex = t.apex;
+        narrow = k;
+      }
+    }
+    if (apex < 0) {
+      for (const k of g.members) if (narrow < 0 || thin[k]!.w < thin[narrow]!.w) narrow = k;
+      const t = thin[narrow]!;
+      const end = (s: number, x: number, y: number): number => {
+        const a = net.sa[s]!;
+        const b = net.sb[s]!;
+        return Math.hypot(net.vx[a]! - x, net.vy[a]! - y) <=
+          Math.hypot(net.vx[b]! - x, net.vy[b]! - y)
+          ? a
+          : b;
+      };
+      apex = tips.midpoint(
+        end(t.i, t.seg[8]!, t.seg[9]!),
+        end(t.j, t.seg[10]!, t.seg[11]!),
+        2 * g.len + (GEODESIC_FACTOR + 1) * d,
+      );
+    }
+    const all: number[] = [];
+    for (const k of g.members) all.push(...thin[k]!.samples);
+    // Pointe exemptée : le bout d'un COIN dont la base dépasse l'outil (largeur maximale de la
+    // bande à l'outil près). Un coin resté sous l'outil sur toute sa longueur (aiguille, poil) est
+    // un filet : la lame le brûle ou l'arrache en entier.
+    if (
+      apex >= 0 &&
+      maxWidth(all) >= THIN_MARGIN * d &&
+      isWedge(all, net.vx[apex]!, net.vy[apex]!, d / 2)
+    )
+      continue;
+    const wPx = Math.max(g.w, Math.min(d, typicalWidth(all, d / 2)));
+    // Largeur courante à l'outil près (moins de 5 % sous d) : la lame passe, rien à signaler.
+    if (wPx >= THIN_MARGIN * d) continue;
+    if (!g.stroke) thinFillLen += 2 * g.len;
+    const w = fmtMm(mm(wPx));
+    const len = fmtMm(mm(g.len));
     issues.push({
       kind: 'thin',
-      severity: 'check',
+      // Trait retracé (centre-ligne) : aucune correction possible, une information.
+      severity: g.stroke ? 'info' : 'check',
       box: boxOf(...g.box),
-      value: r3(mm(g.w)),
+      value: r3(mm(wPx)),
+      length: r3(mm(g.len)),
+      ...(g.stroke ? {} : { fixable: true as const }),
       ...(g.color !== null ? { color: colorOfItem(g.color) } : {}),
       message: g.stroke
-        ? `Trait retracé à ${w} mm d’un autre, sous le diamètre de l’outil (${fmtMm(prm.toolMm)} mm) : risque de double passage.`
-        : `Largeur de ${w} mm, sous le diamètre de l’outil (${fmtMm(prm.toolMm)} mm) : ce détail sera brûlé ou arraché.`,
+        ? `Trait retracé à ${w} mm d’un autre sur ${len} mm, sous le diamètre de l’outil (${fmtMm(prm.toolMm)} mm) : risque de double passage.`
+        : `Filet de ${w} mm de large sur ${len} mm, sous le diamètre de l’outil (${fmtMm(prm.toolMm)} mm) : ce détail sera brûlé ou arraché.`,
     });
   }
+  // T63 — Dessin au trait : part des lignes de découpe des remplissages bordant un filet.
+  let fillLen = 0;
+  for (const s of ids) if (!strokeSeg(s)) fillLen += segLength(net, s);
+  const thinShare = fillLen > 0 ? Math.min(1, thinFillLen / fillLen) : 0;
 
   // --- Nœuds : sommets des polylignes envoyées (fusionnées si le DXF fusionne) -------------
   const sent = prm.mergeShared ? mergedPolylines(geom, net) : geom.polylines;
@@ -528,6 +795,10 @@ export function analyzeCut(geom: CutGeometry, options: CutCheckOptions = {}): Cu
     islandMm2: prm.islandMm2,
     maxNodes: prm.maxNodes,
     mmPerPx: prm.mmPerPx,
+    minThinMm: prm.minThinMm,
+    drawing: { width: r3(mm(geom.width)), height: r3(mm(geom.height)) },
+    thinShare: r3(thinShare),
+    lineArt: isLineArt(thinShare),
     mergeShared: prm.mergeShared,
     contours: {
       total: geom.polylines.length,
@@ -546,7 +817,10 @@ export function analyzeCut(geom: CutGeometry, options: CutCheckOptions = {}): Cu
 }
 
 /** Segments uniques incidents à chaque sommet (CSR). */
-function vertexAdjacency(net: Network, ids: Int32Array): { start: Int32Array; segs: Int32Array } {
+export function vertexAdjacency(
+  net: Network,
+  ids: Int32Array,
+): { start: Int32Array; segs: Int32Array } {
   const start = new Int32Array(net.nv + 1);
   for (const s of ids) {
     start[net.sa[s]! + 1]!++;
@@ -615,13 +889,16 @@ function segSegClosest(
  * (distances marquées par un tampon, tas binaire) ; chaque sommet visité et chaque arête relâchée
  * dépensent le budget commun.
  */
-class Geodesic {
+export class Geodesic {
   private readonly dist: [Float64Array, Float64Array];
   private readonly seen: [Int32Array, Int32Array];
   private readonly done: Int32Array;
   private readonly stampOf: [number, number] = [0, 0];
   private run = 0;
   private prepared = -1;
+  private preparedRadius = -1;
+  /** Sommets atteints par la recherche en cours (`midpoint`), sinon `null`. */
+  private track: number[] | null = null;
   /** Une recherche a atteint son plafond de visites : sa zone n'est pas entièrement connue. */
   private capped = false;
   private heapV = new Int32Array(64);
@@ -701,6 +978,7 @@ class Geodesic {
     this.size = 0;
     seen[src] = run;
     dist[src] = 0;
+    this.track?.push(src);
     this.push(src, 0);
     let visits = 0;
     while (this.size > 0) {
@@ -720,11 +998,46 @@ class Geodesic {
         if (this.done[w] === run) continue;
         const dw = dv + Math.hypot(net.vx[w]! - net.vx[v]!, net.vy[w]! - net.vy[v]!);
         if (dw > radius || (seen[w] === run && dist[w]! <= dw)) continue;
+        if (seen[w] !== run) this.track?.push(w);
         seen[w] = run;
         dist[w] = dw;
         this.push(w, dw);
       }
     }
+  }
+
+  /**
+   * T63 — Sommet au milieu du plus court chemin de u à v le long des lignes de découpe (au plus
+   * `radius`), ou -1 : le sommet A d'une pointe dont u et v sont sur les deux flancs.
+   */
+  midpoint(u: number, v: number, radius: number): number {
+    this.prepared = -1;
+    this.track = [];
+    this.explore(u, 0, radius);
+    const reached = this.track;
+    this.track = null;
+    if (this.budget.exhausted) return -1;
+    this.explore(v, 1, radius);
+    if (this.budget.exhausted) return -1;
+    const [d0, d1] = this.dist;
+    const [s0, s1] = this.seen;
+    let best = Infinity;
+    for (const w of reached)
+      if (s0[w] === this.stampOf[0] && s1[w] === this.stampOf[1])
+        best = Math.min(best, d0[w]! + d1[w]!);
+    if (!(best <= radius)) return -1;
+    let mid = -1;
+    let skew = Infinity;
+    for (const w of reached) {
+      if (s0[w] !== this.stampOf[0] || s1[w] !== this.stampOf[1]) continue;
+      if (d0[w]! + d1[w]! > best + 1e-9 * (1 + best)) continue;
+      const k = Math.abs(d0[w]! - d1[w]!);
+      if (k < skew) {
+        skew = k;
+        mid = w;
+      }
+    }
+    return mid;
   }
 
   /**
@@ -741,8 +1054,9 @@ class Geodesic {
     radius: number,
   ): boolean {
     const { net } = this;
-    if (this.prepared !== i) {
+    if (this.prepared !== i || this.preparedRadius !== radius) {
       this.prepared = i;
+      this.preparedRadius = radius;
       this.capped = false;
       this.explore(net.sa[i]!, 0, radius);
       if (!this.budget.exhausted) this.explore(net.sb[i]!, 1, radius);
@@ -767,6 +1081,18 @@ class Geodesic {
  */
 interface ThinCase {
   w: number;
+  /**
+   * T63 — Cas d'un sommet commun (deux segments jointifs en pointe) : ce sommet (réseau), où la
+   * largeur tombe à zéro ; -1 sinon.
+   */
+  apex: number;
+  /** Profil de la bande : [x, y, largeur] × n (px). */
+  samples: number[];
+  /** Segments (réseau) et portions proches, en paramètres de `sa` vers `sb`. */
+  i: number;
+  j: number;
+  ti: [number, number];
+  tj: [number, number];
   seg: number[];
   ia: number;
   ib: number;
@@ -774,7 +1100,7 @@ interface ThinCase {
   stroke: boolean;
 }
 
-/** Portion de [a, b] proche de [c, e] : projections de c et e, extrémités à moins de d. */
+/** Portion de [a, b] proche de [c, e] : projections de c et e, extrémités à moins de d (paramètres). */
 function nearPortion(
   ax: number,
   ay: number,
@@ -785,7 +1111,7 @@ function nearPortion(
   ex: number,
   ey: number,
   d: number,
-): [number, number, number, number] {
+): [number, number] {
   let t0 = Math.min(closestT(cx, cy, ax, ay, bx, by), closestT(ex, ey, ax, ay, bx, by));
   let t1 = Math.max(closestT(cx, cy, ax, ay, bx, by), closestT(ex, ey, ax, ay, bx, by));
   const near = (px: number, py: number): boolean => {
@@ -794,17 +1120,27 @@ function nearPortion(
   };
   if (near(ax, ay)) t0 = 0;
   if (near(bx, by)) t1 = 1;
-  return [ax + t0 * (bx - ax), ay + t0 * (by - ay), ax + t1 * (bx - ax), ay + t1 * (by - ay)];
+  return [t0, t1];
+}
+
+/** Groupe de cas voisins : un détail fin candidat. */
+interface ThinGroup {
+  /** Largeur minimale mesurée (px). */
+  w: number;
+  box: Acc;
+  color: number | null;
+  stroke: boolean;
+  /** T63 — Longueur de la bande (px) : portions proches réunies par segment, moitié du total. */
+  len: number;
+  /** Cas du groupe (indices dans la liste des cas). */
+  members: number[];
 }
 
 /**
  * Regroupe les cas voisins : chaque portion est échantillonnée (pas d/2) dans des cellules de
  * côté d ; deux cas qui touchent des cellules voisines (8-voisinage) ne font qu'un.
  */
-function clusterThin(
-  thin: ThinCase[],
-  d: number,
-): { w: number; box: Acc; color: number | null; stroke: boolean }[] {
+function clusterThin(thin: ThinCase[], d: number, net: Network): ThinGroup[] {
   const parent = Int32Array.from(thin.keys());
   const find = (a: number): number => {
     while (parent[a] !== a) {
@@ -838,18 +1174,54 @@ function clusterThin(
         if (other !== undefined) parent[find(other)] = find(rep);
       }
   }
-  const groups = new Map<number, { w: number; box: Acc; color: number | null; stroke: boolean }>();
+  const groups = new Map<number, ThinGroup>();
+  /** Portions de chaque groupe, par segment : intervalles de paramètres. */
+  const portions = new Map<number, Map<number, [number, number][]>>();
+  const addPortion = (r: number, s: number, t: [number, number]): void => {
+    let bySeg = portions.get(r);
+    if (!bySeg) portions.set(r, (bySeg = new Map()));
+    const list = bySeg.get(s);
+    if (list) list.push(t);
+    else bySeg.set(s, [t]);
+  };
   thin.forEach((t, k) => {
     const r = find(k);
     let g = groups.get(r);
     if (!g) {
-      g = { w: t.w, box: newAcc(), color: t.ia === t.ib ? t.ia : null, stroke: t.stroke };
+      g = {
+        w: t.w,
+        box: newAcc(),
+        color: t.ia === t.ib ? t.ia : null,
+        stroke: t.stroke,
+        len: 0,
+        members: [],
+      };
       groups.set(r, g);
     }
+    g.members.push(k);
     if (t.w < g.w) g.w = t.w;
     if (!t.stroke) g.stroke = false;
     for (let q = 0; q < 8; q += 2) grow(g.box, t.seg[q]!, t.seg[q + 1]!);
     if (g.color !== null && (t.ia !== g.color || t.ib !== g.color)) g.color = null;
+    addPortion(r, t.i, t.ti);
+    addPortion(r, t.j, t.tj);
   });
+  for (const [r, g] of groups) {
+    let total = 0;
+    for (const [s, list] of portions.get(r)!) {
+      list.sort((a, b) => a[0] - b[0]);
+      let covered = 0;
+      let [c0, c1] = list[0]!;
+      for (const [t0, t1] of list.slice(1)) {
+        if (t0 > c1) {
+          covered += c1 - c0;
+          [c0, c1] = [t0, t1];
+        } else if (t1 > c1) c1 = t1;
+      }
+      covered += c1 - c0;
+      total += covered * segLength(net, s);
+    }
+    g.len = total / 2;
+  }
   return [...groups.values()];
 }

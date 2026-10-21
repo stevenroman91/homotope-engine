@@ -13,14 +13,18 @@
  * T33 — Un trait d'axe du centre-ligne est, lui, la forme à tracer : chaque sous-tracé devient
  * une `POLYLINE` OUVERTE (drapeau 0 ; fermée seulement pour une boucle `Z`), une passe ;
  * l'épaisseur n'est pas écrite (c'est celle de l'outil).
+ * T95 — Le contour de découpe sticker (groupe `CutContour` du SVG) va sur son PROPRE calque
+ * `CutContour` (polylignes fermées : R12 n'a pas de `LWPOLYLINE`) ; `cutOnly` n'écrit que lui.
  *
  * Unité : millimètre (`$INSUNITS` = 4), 1 px = 1 pt = 25,4 / 72 mm, comme le PDF et l'EPS ;
- * Y vers le haut (`y' = height − y`).
+ * Y vers le haut (`y' = height − y`). T63 — `widthMm` fixe la largeur RÉELLE du dessin (l'atelier
+ * l'envoie, 200 mm par défaut) ; absente, l'échelle reste 1 px = 1 pt (fichier inchangé).
  */
 import { cutGeometry } from '../cutcheck/geometry.ts';
 import { mergedPolylines } from '../cutcheck/network.ts';
-import { cutItems, flattenSubpath, MM_PER_PX } from './polyline.ts';
-import { fmtNum, type Rgb, type VectorScene } from './scene.ts';
+import { CUT_CONTOUR } from './cutcontour.ts';
+import { clampMmPerPx, cutItems, flattenSubpath, MM_PER_PX } from './polyline.ts';
+import { cutContourItems, fmtNum, type Rgb, type VectorScene, sceneImageWidth } from './scene.ts';
 
 export { flattenSubpath, MM_PER_PX } from './polyline.ts';
 
@@ -54,6 +58,29 @@ export interface DxfOptions {
    * polylignes ouvertes là où leur frontière a déjà été écrite (README « Prêt pour la découpe »).
    */
   mergeShared?: boolean;
+  /**
+   * T63 — Largeur réelle du dessin (mm) : l'échelle devient `widthMm` / largeur du SVG. Absente
+   * ou invalide : 1 px = 1 pt (`MM_PER_PX`).
+   */
+  widthMm?: number;
+  /**
+   * T95 — N'écrire QUE le calque `CutContour` (contour de découpe sticker) : une Silhouette ou
+   * un imprimeur ne veut que le trait. Sans contour dans le SVG : un DXF sans entité.
+   */
+  cutOnly?: boolean;
+}
+
+/** Bornes de la largeur réelle d'un DXF (mm) : 1 mm à 100 m. */
+export const DXF_MIN_WIDTH_MM = 1;
+export const DXF_MAX_WIDTH_MM = 100_000;
+
+/**
+ * Échelle (mm par px) d'un DXF de largeur `widthPx` : `widthMm` borné, sinon 1 px = 1 pt ; le
+ * résultat est borné comme celui du contrôle de découpe (`clampMmPerPx`).
+ */
+export function dxfMmPerPx(widthPx: number, widthMm: number | undefined): number {
+  if (widthMm === undefined || !Number.isFinite(widthMm) || !(widthPx > 0)) return MM_PER_PX;
+  return clampMmPerPx(Math.min(DXF_MAX_WIDTH_MM, Math.max(DXF_MIN_WIDTH_MM, widthMm)) / widthPx);
 }
 
 /** Polyligne à écrire : couleur (couche), points [x0, y0, …] en px du SVG, fermeture. */
@@ -61,6 +88,8 @@ export interface DxfPolyline {
   rgb: Rgb;
   pts: Float64Array;
   closed: boolean;
+  /** T95 — Calque nommé (contour de découpe sticker) au lieu de la couche de sa couleur. */
+  layer?: string;
 }
 
 /** Couche d'une couleur : hexadécimal majuscule à 6 chiffres (nom R12 valide). */
@@ -98,7 +127,8 @@ export function dxfLayerNames(
   colors: readonly Rgb[],
   names: Readonly<Record<string, string>> = {},
 ): string[] {
-  const used = new Set(['0']);
+  // T95 : `CUTCONTOUR` est réservé au calque du contour de découpe sticker.
+  const used = new Set(['0', CUT_CONTOUR.name.toUpperCase()]);
   return colors.map((rgb) => {
     const named = names[colorKey(rgb)];
     let name = named ? dxfLayerLabel(named) : '';
@@ -149,9 +179,12 @@ export function dxfTolerance(raw: number | undefined): number {
 /** Écrit le DXF R12 d'une scène (chaîne ASCII, fins de ligne `\r\n` comme AutoCAD). */
 export function writeDxf(scene: VectorScene, options: DxfOptions = {}): string {
   const tolerance = dxfTolerance(options.tolerance);
-  const filled = cutItems(scene, options.includeBackground === true);
+  const cutOnly = options.cutOnly === true;
+  const filled = cutOnly ? [] : cutItems(scene, options.includeBackground === true);
   const polylines: DxfPolyline[] = [];
-  if (options.mergeShared === true) {
+  if (cutOnly) {
+    // T95 : le calque du contour seul (ajouté ci-dessous).
+  } else if (options.mergeShared === true) {
     const geom = cutGeometry(scene, {
       tolerance,
       includeBackground: options.includeBackground === true,
@@ -167,12 +200,22 @@ export function writeDxf(scene: VectorScene, options: DxfOptions = {}): string {
           closed: it.fill || sp.closed,
         });
   }
+  // T95 : contour de découpe sticker, après le dessin, sur son calque.
+  for (const it of cutContourItems(scene))
+    for (const sp of it.subpaths)
+      polylines.push({
+        rgb: it.rgb,
+        pts: flattenSubpath(sp, tolerance),
+        closed: true,
+        layer: CUT_CONTOUR.name,
+      });
   return writeDxfPolylines(
     scene.width,
     scene.height,
     filled.map((it) => it.rgb),
     polylines,
     options.names,
+    dxfMmPerPx(sceneImageWidth(scene), options.widthMm),
   );
 }
 
@@ -187,8 +230,9 @@ export function writeDxfPolylines(
   layerColors: readonly Rgb[],
   polylines: readonly DxfPolyline[],
   layerNames?: Readonly<Record<string, string>>,
+  mmPerPx: number = MM_PER_PX,
 ): string {
-  const mm = (v: number): string => fmtNum(v * MM_PER_PX, MM_DECIMALS);
+  const mm = (v: number): string => fmtNum(v * mmPerPx, MM_DECIMALS);
   const out: string[] = [];
   const g = (code: number, value: string | number): void => {
     out.push(String(code), String(value));
@@ -203,6 +247,8 @@ export function writeDxfPolylines(
   const names = dxfLayerNames([...byColor.values()], layerNames);
   const layerOf = new Map([...byColor.keys()].map((k, i) => [k, names[i]!]));
   const layers = new Map([...byColor.values()].map((rgb, i) => [names[i]!, rgb]));
+  // T95 : calques nommés (contour de découpe sticker), après les couches de couleur.
+  for (const pl of polylines) if (pl.layer && !layers.has(pl.layer)) layers.set(pl.layer, pl.rgb);
 
   g(0, 'SECTION');
   g(2, 'HEADER');
@@ -249,7 +295,7 @@ export function writeDxfPolylines(
   g(0, 'SECTION');
   g(2, 'ENTITIES');
   for (const pl of polylines) {
-    const layer = layerOf.get(colorKey(pl.rgb))!;
+    const layer = pl.layer ?? layerOf.get(colorKey(pl.rgb))!;
     const pts = pl.pts;
     g(0, 'POLYLINE');
     g(8, layer);

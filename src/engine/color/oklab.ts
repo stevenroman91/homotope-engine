@@ -126,3 +126,9 @@ function clampByte(v: number): number {
 function toByte(c: number): number {
   return clampByte(c * 255);
 }
+
+/** RGB borné à 0..255 et arrondi à l'octet. */
+export function normalizeRgb(rgb: Rgb): Rgb {
+  const c = (v: number): number => (v <= 0 ? 0 : v >= 255 ? 255 : Math.round(v));
+  return [c(rgb[0]), c(rgb[1]), c(rgb[2])];
+}

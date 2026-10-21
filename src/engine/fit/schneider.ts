@@ -34,6 +34,9 @@ export interface Span {
   /** Tangente unitaire à l'arrivée, orientée vers l'ARRIÈRE (vers l'intérieur). */
   t2x: number;
   t2y: number;
+  /** T125a — Extrémité posée hors des points (nœud intérieur d'un arc exact). */
+  ex?: number;
+  ey?: number;
 }
 
 /** Espace de travail réutilisable (évite les allocations par morceau). */
@@ -395,7 +398,8 @@ function centerTangent(
   out[1] = dy / l;
 }
 
-function lineSpan(
+/** Morceau droit [i0, i1] (tangentes d'extrémité gardées pour une fusion ultérieure). */
+export function lineSpan(
   i0: number,
   i1: number,
   t1x: number,
@@ -404,6 +408,15 @@ function lineSpan(
   t2y: number,
 ): Span {
   return { i0, i1, cubic: false, c1x: 0, c1y: 0, c2x: 0, c2y: 0, t1x, t1y, t2x, t2y };
+}
+
+/** Fait du morceau `s` la cubique de poignées c[2..5]. */
+export function setCubic(s: Span, c: Float64Array): void {
+  s.cubic = true;
+  s.c1x = c[2]!;
+  s.c1y = c[3]!;
+  s.c2x = c[4]!;
+  s.c2y = c[5]!;
 }
 
 /**
@@ -443,20 +456,9 @@ export function fitCubicRange(
     }
     const err = fitSingleCubic(sx, sy, ox, oy, f, l, a1x, a1y, b2x, b2y, tolerance, ws);
     if (err < tolerance) {
-      const b = ws.best;
-      out.push({
-        i0: f,
-        i1: l,
-        cubic: true,
-        c1x: b[2]!,
-        c1y: b[3]!,
-        c2x: b[4]!,
-        c2y: b[5]!,
-        t1x: a1x,
-        t1y: a1y,
-        t2x: b2x,
-        t2y: b2y,
-      });
+      const s = lineSpan(f, l, a1x, a1y, b2x, b2y);
+      setCubic(s, ws.best);
+      out.push(s);
       continue;
     }
     const split = ws.split;

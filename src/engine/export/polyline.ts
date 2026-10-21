@@ -9,6 +9,16 @@ import type { SceneItem, VectorScene } from './scene.ts';
 
 /** Millimètres par px (1 px = 1 pt), l'unité de tous les exports. */
 export const MM_PER_PX = 25.4 / 72;
+/**
+ * Bornes de l'échelle (mm par px), UN jeu partagé par le DXF (`dxfMmPerPx`) et le contrôle de
+ * découpe (`cutParams`) : les deux lisent toujours la même échelle.
+ */
+export const MIN_MM_PER_PX = 1e-4;
+export const MAX_MM_PER_PX = 1e3;
+/** Échelle bornée à [`MIN_MM_PER_PX`, `MAX_MM_PER_PX`]. */
+export function clampMmPerPx(v: number): number {
+  return Math.min(MAX_MM_PER_PX, Math.max(MIN_MM_PER_PX, v));
+}
 
 /** Pas d'aplatissement au plus par cubique (garde contre une tolérance absurde). */
 const MAX_STEPS = 256;
@@ -16,11 +26,16 @@ const MAX_STEPS = 256;
 /**
  * Éléments découpés (DXF) dans l'ordre de peinture : les remplissages (leur contour) et les
  * traits d'axe du centre-ligne (T33). Le trait anti-liseré (repasse du même contour) n'en est
- * pas ; le `<rect>` de fond non plus, sauf `includeBackground` (un cadre autour du motif).
+ * pas ; le `<rect>` de fond non plus, sauf `includeBackground` (un cadre autour du motif) ; ni le
+ * contour de découpe sticker (T95), que le contrôle de découpe ne lit jamais.
  */
 export function cutItems(scene: VectorScene, includeBackground = false): SceneItem[] {
+  // T95 : le contour de découpe sticker n'est pas une forme du dessin (calque à part en DXF).
   return scene.items.filter(
-    (it) => (it.fill || it.centerline === true) && (includeBackground || !it.background),
+    (it) =>
+      (it.fill || it.centerline === true) &&
+      !it.cutcontour &&
+      (includeBackground || !it.background),
   );
 }
 

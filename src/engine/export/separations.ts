@@ -25,6 +25,7 @@ import {
   parseColor,
   sceneFromSvg,
   SceneError,
+  withoutCutContour,
   type SceneItem,
   type VectorScene,
 } from './scene.ts';
@@ -70,6 +71,13 @@ function splitSvg(svg: string): SplitSvg {
   while (i < close) {
     const lt = svg.indexOf('<', i);
     if (lt < 0 || lt >= close) break;
+    if (svg.startsWith('<g', lt)) {
+      // T95 : le contour de découpe sticker (seul groupe admis) n'est jamais une séparation.
+      const end = svg.indexOf('</g>', lt);
+      if (end < 0) throw new SceneError('</g> absent');
+      i = end + 4;
+      continue;
+    }
     if (svg.startsWith('<mask', lt)) {
       const end = svg.indexOf('</mask>', lt);
       if (end < 0) throw new SceneError('</mask> absent');
@@ -228,7 +236,8 @@ export interface SeparationFile {
  */
 export function separationScenes(svg: string): { color: string; scene: VectorScene }[] {
   if (svgIsStacked(svg)) throw new SeparationError(STACKED_SEPARATIONS_MESSAGE);
-  const scene = sceneFromSvg(svg);
+  // T95 : séparations sans le contour de découpe sticker.
+  const scene = withoutCutContour(sceneFromSvg(svg));
   const colors: string[] = [];
   for (const it of scene.items) {
     const c = colorKey(it.rgb);
@@ -261,6 +270,51 @@ export function separationScenes(svg: string): { color: string; scene: VectorSce
     }
     return { color, scene: { ...scene, fillRule: 'evenodd', items } };
   });
+}
+
+/**
+ * T98 — Calques par couleur pour ÉCLAIRER une couleur dans l'atelier (survol d'une pastille) :
+ * la zone VISIBLE de chaque couleur (défonce, comme une séparation) quand la géométrie est
+ * découpée ; en mode empilé, les formes de la couleur telles quelles, fond exclu (il couvrirait
+ * tout le dessin). Clé = `colorKey` (`#rrggbb` minuscule). Le contour sticker est ignoré.
+ */
+export function colorLayers(svg: string): Map<string, VectorScene> {
+  const out = new Map<string, VectorScene>();
+  if (!svgIsStacked(svg)) {
+    for (const { color, scene } of separationScenes(svg)) out.set(color, scene);
+    return out;
+  }
+  const scene = withoutCutContour(sceneFromSvg(svg));
+  for (const it of scene.items) {
+    if (it.background) continue;
+    const key = colorKey(it.rgb);
+    const layer = out.get(key) ?? { ...scene, items: [] };
+    layer.items.push(it);
+    out.set(key, layer);
+  }
+  return out;
+}
+
+/**
+ * T98 — SVG d'un calque peint d'UNE couleur plate (`fill`, couleur d'accent de l'atelier) :
+ * remplissages et traits confondus, sans opacité. Pur.
+ */
+export function layerSvg(scene: VectorScene, fill: string): string {
+  if (!/^#[0-9a-f]{3,8}$/i.test(fill)) throw new Error(`layerSvg : couleur invalide « ${fill} »`);
+  const w = fmtNum(scene.width, 4);
+  const h = fmtNum(scene.height, 4);
+  const parts = [
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}"${scene.fillRule === 'evenodd' ? ' fill-rule="evenodd"' : ''}>`,
+  ];
+  for (const it of scene.items) {
+    parts.push(
+      it.fill
+        ? `<path fill="${fill}" d="${pathData(it.subpaths)}"/>`
+        : `<path fill="none" stroke="${fill}" stroke-width="${fmtNum(it.stroke ?? 1, 4)}" stroke-linecap="round" stroke-linejoin="round" d="${pathData(it.subpaths)}"/>`,
+    );
+  }
+  parts.push('</svg>');
+  return parts.join('');
 }
 
 /** `d` d'un tracé en coordonnées absolues (4 décimales : celles du SVG, au plus). */

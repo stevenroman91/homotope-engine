@@ -193,6 +193,8 @@ export function vectorize(
           ...opts.fit,
           tolerance: cl.tolerance,
           lineTolerance: Math.min(opts.fit.lineTolerance, cl.tolerance),
+          // T125a : un trait n'est pas un bord de forme, le réglage y reste éteint.
+          exactShapes: false,
           pixelArt: false,
         },
         ctx,

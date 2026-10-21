@@ -27,7 +27,10 @@ import {
   paletteOklab,
   pixelError,
   rasterizeSvg,
+  shapeDeviations,
   ssim,
+  type ExpectedShapes,
+  type ShapeReport,
   type TopologyDiff,
 } from './metrics.ts';
 
@@ -45,6 +48,11 @@ export interface EvalCase {
   fixture: string;
   preset: PresetName;
   options?: OptionOverrides;
+  /**
+   * (T125b) Géométrie dessinée par le générateur de la fixture (cercles, droites) : mesurée
+   * sur le SVG émis (`shapeDeviations`). Absente : aucune mesure de forme.
+   */
+  expected?: ExpectedShapes;
 }
 
 export interface Thresholds {
@@ -56,6 +64,12 @@ export interface Thresholds {
   holesExact: boolean;
   nodesMax: number;
   bytesMax: number;
+  /** (T125b) Rayon crête à crête maximal d'un cercle attendu (px). Cas avec `expected` seulement. */
+  circleDeviationMax?: number;
+  /** (T125b) Somme maximale des virages concaves des cercles attendus (degrés). */
+  concaveTurnsMax?: number;
+  /** (T125b) Écart maximal à une droite attendue (px). */
+  lineDeviationMax?: number;
 }
 
 export interface CaseReport {
@@ -81,6 +95,8 @@ export interface CaseReport {
     diffs: TopologyDiff[];
   };
   stats: SvgStats;
+  /** (T125b) Écart aux formes attendues ; absent si le cas n'en déclare pas. */
+  shapes?: ShapeReport;
   timings: Partial<Record<Stage, number>>;
   /** Durée totale de la vectorisation (ms), mesurée autour de l'appel. */
   totalMs: number;
@@ -212,6 +228,7 @@ export function evaluateCase(
       diffs: topo.diffs,
     },
     stats: result.stats,
+    ...(c.expected ? { shapes: shapeDeviations(result.svg, c.expected) } : {}),
     timings: result.timings,
     totalMs,
   };
@@ -240,14 +257,25 @@ export function checkThresholds(r: CaseReport, t: Thresholds): string[] {
   }
   if (!(r.stats.nodes <= t.nodesMax)) fail('nœuds', String(r.stats.nodes), `≤ ${t.nodesMax}`);
   if (!(r.stats.bytes <= t.bytesMax)) fail('octets', String(r.stats.bytes), `≤ ${t.bytesMax}`);
+  // T125b : un seuil de forme sans géométrie mesurée échoue (jamais un passage muet).
+  const shape = (what: string, got: number | undefined, max: number | undefined, unit: string) => {
+    if (max === undefined) return;
+    if (got === undefined) fail(what, 'non mesuré (aucune forme attendue)', `≤ ${max}${unit}`);
+    else if (!(got <= max)) fail(what, `${got.toFixed(3)}${unit}`, `≤ ${max}${unit}`);
+  };
+  shape('écart au cercle', r.shapes?.circleDeviationMax, t.circleDeviationMax, ' px');
+  shape('virages concaves', r.shapes?.concaveTurns, t.concaveTurnsMax, '°');
+  shape('écart à la droite', r.shapes?.lineDeviationMax, t.lineDeviationMax, ' px');
   return out;
 }
 
 /** Tableau Markdown du rapport. */
 export function formatTable(reports: CaseReport[]): string {
   const head =
-    '| fixture | préréglage | SSIM | erreur moy. | p95 | liserés | trous | composantes | nœuds | octets | ms |';
-  const sep = '|---|---|---:|---:|---:|---:|---|---|---:|---:|---:|';
+    '| fixture | préréglage | SSIM | erreur moy. | p95 | liserés | trous | composantes | nœuds | octets | cercle (px) | concave (°) | droite (px) | ms |';
+  const sep = '|---|---|---:|---:|---:|---:|---|---|---:|---:|---:|---:|---:|---:|';
+  const shape = (v: number | undefined, digits: number, has: boolean): string =>
+    v === undefined || !has ? '—' : v.toFixed(digits);
   const rows = reports.map((r) =>
     [
       r.name,
@@ -260,6 +288,9 @@ export function formatTable(reports: CaseReport[]): string {
       `${r.topology.sourceComponents}→${r.topology.renderComponents}`,
       String(r.stats.nodes),
       String(r.stats.bytes),
+      shape(r.shapes?.circleDeviationMax, 3, (r.shapes?.circles.length ?? 0) > 0),
+      shape(r.shapes?.concaveTurns, 1, (r.shapes?.circles.length ?? 0) > 0),
+      shape(r.shapes?.lineDeviationMax, 3, (r.shapes?.lines.length ?? 0) > 0),
       r.totalMs.toFixed(0),
     ].join(' | '),
   );

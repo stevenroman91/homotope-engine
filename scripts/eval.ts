@@ -65,7 +65,9 @@ for (const c of selected) {
   }
 }
 
-writeFileSync(join(outDir, 'report.json'), JSON.stringify({ reports }, null, 2) + '\n');
+// T125b : une forme perdue a un écart infini, que JSON écrirait `null` ; on l'écrit en clair.
+const keepInfinity = (_k: string, v: unknown) => (v === Infinity ? 'Infinity' : v);
+writeFileSync(join(outDir, 'report.json'), JSON.stringify({ reports }, keepInfinity, 2) + '\n');
 console.log(formatTable(reports));
 console.log(`\nSorties : ${outDir}`);
 if (check) {

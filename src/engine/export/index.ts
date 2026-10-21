@@ -17,15 +17,32 @@ export {
   DXF_DEFAULT_TOLERANCE,
   DXF_MAX_TOLERANCE,
   DXF_MIN_TOLERANCE,
+  DXF_MAX_WIDTH_MM,
+  DXF_MIN_WIDTH_MM,
+  dxfMmPerPx,
   flattenSubpath,
   layerName,
   MM_PER_PX,
   writeDxf,
   type DxfOptions,
 } from './dxf.ts';
+export {
+  CUT_CONTOUR,
+  CUT_CONTOUR_PRECISION,
+  hasCutContour,
+  stripCutContour,
+  withCutContour,
+} from './cutcontour.ts';
 export { writeEps } from './eps.ts';
 export { writePdf } from './pdf.ts';
-export { SceneError, sceneFromSvg, type SceneItem, type VectorScene } from './scene.ts';
+export {
+  cutContourItems,
+  SceneError,
+  sceneFromSvg,
+  withoutCutContour,
+  type SceneItem,
+  type VectorScene,
+} from './scene.ts';
 export {
   colorLabel,
   colorSlug,

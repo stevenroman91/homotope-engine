@@ -367,6 +367,15 @@ export interface FitOptions {
    */
   robustLines: boolean;
   /**
+   * T125a — Formes exactes : un tronçon (entre deux coins) dont les points tiennent dans un arc
+   * de cercle à `tolerance` près est posé sur cet arc (cercle des moindres carrés passant par ses
+   * extrémités, rayon ≥ 6 px de travail, balayage ≥ 20°), une île sans coin qui tient dans un
+   * cercle devient un cercle exact (4 cubiques, nœuds aux extrema). Émis en cubiques exactes de
+   * ≤ 90° (écart au cercle ≤ 0,03 % du rayon), chacune vérifiée par F1, sinon ajustement
+   * habituel. Les droites restent celles du test existant. Absent ou faux : sortie inchangée.
+   */
+  exactShapes: boolean;
+  /**
    * Mode pixel art : aucun lissage, aucune cubique ; la chaîne devient une
    * polyligne aux coordonnées de treillis exactes, points colinéaires fusionnés.
    */

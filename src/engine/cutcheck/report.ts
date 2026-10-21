@@ -22,6 +22,17 @@ export const MAX_ISLAND_MM2 = 1000;
 export const DEFAULT_MAX_NODES = 1000;
 export const MIN_MAX_NODES = 10;
 export const MAX_MAX_NODES = 1_000_000;
+/**
+ * T63 — Longueur minimale d'un filet (mm) : une largeur sous l'outil n'est signalée que si elle
+ * PERSISTE sur cette longueur. Absente : le diamètre de l'outil.
+ */
+export const MIN_THIN_MM = 0;
+export const MAX_THIN_MM = 1000;
+/**
+ * T63 — Dessin au trait : part de la longueur des lignes de découpe (remplissages) qui borde un
+ * filet plus fin que l'outil, au-delà de laquelle le contrôle le dit en tête.
+ */
+export const LINE_ART_SHARE = 0.5;
 /** Problèmes LISTÉS au plus par type (les totaux restent exacts). */
 export const MAX_LISTED_PER_KIND = 100;
 
@@ -74,6 +85,23 @@ export interface CutIssue {
   value: number;
   /** Couleur (hexadécimal `RRGGBB`, nom de la couche DXF) du contour en cause, s'il est unique. */
   color?: string;
+  /** T63 — `thin` : longueur du filet (mm), le long de la bande trop étroite. */
+  length?: number;
+  /** T63 — `island` : dimensions de sa boîte (mm). */
+  size?: { width: number; height: number };
+  /**
+   * T63 — Le moteur sait le corriger (`correctScene`) : élargir un filet, retirer un aller-retour
+   * ou un îlot. Absent : aucune correction proposée.
+   */
+  fixable?: true;
+}
+
+/** T63 — Correction demandée pour un problème listé, repéré par son type et sa boîte. */
+export type CutFixKind = 'thin' | 'island' | 'overlap';
+
+export interface CutFix {
+  kind: CutFixKind;
+  box: CutBox;
 }
 
 export interface CutColorNodes {
@@ -89,6 +117,16 @@ export interface CutReport {
   islandMm2: number;
   maxNodes: number;
   mmPerPx: number;
+  /** T63 — Longueur minimale d'un filet signalé (mm). */
+  minThinMm: number;
+  /** T63 — Dimensions du dessin à cette échelle (mm). */
+  drawing: { width: number; height: number };
+  /**
+   * T63 — Part (0 à 1) de la longueur des lignes de découpe des remplissages qui borde un filet
+   * plus fin que l'outil ; `lineArt` au-delà de `LINE_ART_SHARE`.
+   */
+  thinShare: number;
+  lineArt: boolean;
   /** Frontières communes fusionnées (chaque segment n'est découpé qu'une fois). */
   mergeShared: boolean;
   /** Contours découpés : fermés, ouverts (traits du centre-ligne compris). */
@@ -169,6 +207,11 @@ export function emptyTotals(): Record<CutIssueKind, number> {
     island: 0,
     nodes: 0,
   };
+}
+
+/** T63 — Dessin au trait : la majorité des lignes de découpe borde des filets sous l'outil. */
+export function isLineArt(thinShare: number): boolean {
+  return thinShare > LINE_ART_SHARE;
 }
 
 /** Borne un nombre (NaN ou absent → défaut). */

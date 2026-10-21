@@ -25,6 +25,7 @@ import type {
 } from '../src/engine/types.ts';
 import { CancelledError } from '../src/engine/types.ts';
 import { labelsFromAscii, randomQuant, rng } from './label-helpers.ts';
+import { assertWithinBudget, measureReference, perfBudget, printBudget } from './perf-budget.ts';
 
 /** Ajustement de base (T04) : sans la portée du lissage ni les droites robustes (T43). */
 const LOGO: FitOptions = {
@@ -34,6 +35,7 @@ const LOGO: FitOptions = {
   lineTolerance: 0.5,
   smoothingReach: 0,
   robustLines: false,
+  exactShapes: false,
   pixelArt: false,
 };
 const PIXEL: FitOptions = { ...LOGO, pixelArt: true, smoothing: 0 };
@@ -278,7 +280,7 @@ describe('fitChains — progression, annulation, performance', () => {
     );
   });
 
-  it('10 000 chaînes de 50 points en < 1 s', () => {
+  it('10 000 chaînes de 50 points en < 1 s (× facteur de la machine, T102)', () => {
     // Chemins de treillis (pas unitaires) suivant une direction qui tourne doucement.
     const rand = rng(7);
     const chains: BoundaryChain[] = [];
@@ -317,11 +319,13 @@ describe('fitChains — progression, annulation, performance', () => {
       });
     }
     fitChains(chains.slice(0, 500), LOGO); // échauffement du JIT
+    // T102 : budget nominal 1 000 ms × facteur de la machine (référence chronométrée juste avant).
+    const budget = perfBudget(1000, measureReference());
     const t0 = performance.now();
     const out = fitChains(chains, LOGO);
     const dt = performance.now() - t0;
     expect(out).toHaveLength(10000);
-    expect(dt).toBeLessThan(1000);
+    printBudget(assertWithinBudget('fitChains, 10 000 chaînes', dt, budget));
   });
 });
 

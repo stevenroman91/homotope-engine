@@ -24,6 +24,8 @@ export const DEFAULT_OPTIONS: VectorizeOptions = {
   // T08 : bandes d'anti-aliasing d'au plus 1,3 px absorbées.
   segment: { minRegionArea: 8, blendBand: 1.3, connectivity: 4 },
   // T43 : portée du lissage et droites robustes, inactives hors du préréglage « Logo ».
+  // T125a : formes exactes, allumées par Logo et Noir et blanc seulement (Dessin au trait : la
+  // mesure sur text.png régressait, réglage éteint).
   fit: {
     tolerance: 1.0,
     cornerAngle: 60,
@@ -31,6 +33,7 @@ export const DEFAULT_OPTIONS: VectorizeOptions = {
     lineTolerance: 0.5,
     smoothingReach: 0,
     robustLines: false,
+    exactShapes: false,
     pixelArt: false,
   },
   // T08 : fond en `<rect>` (images opaques seulement) et trait anti-liseré d'1 px.
@@ -58,6 +61,7 @@ export function presetOptions(name: PresetName): VectorizeOptions {
       o.fit.cornerAngle = 55;
       o.fit.smoothingReach = 12;
       o.fit.robustLines = true;
+      o.fit.exactShapes = true;
       return o;
     case 'illustration':
       o.quantize.maxColors = 32;
@@ -121,6 +125,7 @@ export function presetOptions(name: PresetName): VectorizeOptions {
       o.fit.cornerAngle = 55;
       o.fit.smoothingReach = 12;
       o.fit.robustLines = true;
+      o.fit.exactShapes = true;
       o.export.backgroundRect = false;
       o.export.seamStroke = 0;
       return o;

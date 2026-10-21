@@ -10,8 +10,11 @@
  * Seul le sous-ensemble émis par Homotope est accepté : `<svg>` racine, `<rect>` de fond,
  * `<path>` (remplissage, trait anti-liseré, ou les deux) et un `<mask>` de gomme (T08/F1),
  * sauté. Tout autre élément lève `SceneError` (jamais d'export silencieusement faux).
+ * T95 — Seul groupe admis : `<g id="CutContour" data-homotope="cutcontour">` (contour de découpe
+ * sticker, `cutcontour.ts`), dont les tracés deviennent des items `cutcontour`.
  */
 import { parsePathData, type ParsedSubpath } from '../svg/parse.ts';
+import { CUT_CONTOUR } from './cutcontour.ts';
 
 export type Rgb = readonly [number, number, number];
 
@@ -38,6 +41,12 @@ export interface SceneItem {
    * en EPS, mais qui n'est PAS une forme à découper (DXF : omis par défaut).
    */
   background?: true;
+  /**
+   * T95 — Trait du contour de découpe sticker (groupe `CutContour`) : jamais peint comme le
+   * dessin (`paintedItems`), jamais dans les séparations ni dans le contrôle de découpe ; le DXF
+   * l'écrit sur son calque, le PDF en couleur d'accompagnement.
+   */
+  cutcontour?: true;
   /** Sous-tracés en coordonnées ABSOLUES du SVG (Y vers le bas). */
   subpaths: ParsedSubpath[];
 }
@@ -49,6 +58,34 @@ export interface VectorScene {
   /** Règle de remplissage héritée de `<svg>` : `evenodd` en mode découpé, `nonzero` empilé. */
   fillRule: 'evenodd' | 'nonzero';
   items: SceneItem[];
+  /**
+   * T95 — Dimensions de l'IMAGE d'origine quand la page a été agrandie par un contour de découpe
+   * qui déborde (`withCutContour` : `viewBox` décalé, `data-homotope-image`). Absent : la page
+   * EST l'image. La largeur réelle (mm) se rapporte toujours à l'image (`sceneImageWidth`).
+   */
+  image?: { width: number; height: number };
+}
+
+/** Largeur de l'IMAGE (px) à laquelle se rapporte une largeur réelle en mm : la page sinon. */
+export function sceneImageWidth(scene: VectorScene): number {
+  return scene.image?.width ?? scene.width;
+}
+
+/** Translation en place des sous-tracés (page agrandie : l'origine du `viewBox` devient 0). */
+function translateSubpaths(subpaths: ParsedSubpath[], dx: number, dy: number): void {
+  for (const sp of subpaths) {
+    sp.start = [sp.start[0] + dx, sp.start[1] + dy];
+    for (const s of sp.segments) {
+      s.x += dx;
+      s.y += dy;
+      if (s.kind === 'cubic') {
+        s.c1x += dx;
+        s.c1y += dy;
+        s.c2x += dx;
+        s.c2y += dy;
+      }
+    }
+  }
 }
 
 /** SVG hors du sous-ensemble émis par Homotope. */
@@ -108,7 +145,11 @@ export function sceneFromSvg(svg: string): VectorScene {
   )
     throw new SceneError('contenu avant <svg>');
   let scene: VectorScene | null = null;
+  // Page agrandie (T95) : origine du `viewBox` ≠ 0 ; les coordonnées sont ramenées à la page.
+  let dx = 0;
+  let dy = 0;
   let maskDepth = 0;
+  let inCut = false;
   let closed = false;
   while (i < svg.length) {
     const lt = svg.indexOf('<', i);
@@ -125,7 +166,8 @@ export function sceneFromSvg(svg: string): VectorScene {
     if (closed) throw new SceneError('contenu après </svg>');
     if (close) {
       if (name === 'mask') maskDepth--;
-      else if (name === 'svg') closed = true;
+      else if (name === 'g' && inCut) inCut = false;
+      else if (name === 'svg' && !inCut) closed = true;
       else throw new SceneError(`</${name!}> inattendu`);
       continue;
     }
@@ -138,6 +180,26 @@ export function sceneFromSvg(svg: string): VectorScene {
         fillRule: a.get('fill-rule') === 'evenodd' ? 'evenodd' : 'nonzero',
         items: [],
       };
+      const vb = a.get('viewBox');
+      if (vb !== undefined) {
+        const p = vb
+          .trim()
+          .split(/[\s,]+/)
+          .map(Number);
+        if (p.length !== 4 || !p.every(Number.isFinite) || p[2]! <= 0 || p[3]! <= 0)
+          throw new SceneError(`viewBox invalide : « ${vb} »`);
+        dx = -p[0]!;
+        dy = -p[1]!;
+      }
+      const img = a.get('data-homotope-image');
+      if (img !== undefined) {
+        const [iw, ih, ...rest] = img.trim().split(/\s+/);
+        if (rest.length > 0) throw new SceneError(`data-homotope-image invalide : « ${img} »`);
+        scene.image = {
+          width: positive(iw, 'largeur de l’image'),
+          height: positive(ih, 'hauteur de l’image'),
+        };
+      }
       continue;
     }
     if (name === 'mask') {
@@ -145,6 +207,12 @@ export function sceneFromSvg(svg: string): VectorScene {
       continue;
     }
     if (maskDepth > 0) continue; // contenu de la gomme : ni peint ni découpé
+    if (name === 'g') {
+      if (inCut || self || a.get('data-homotope') !== CUT_CONTOUR.marker)
+        throw new SceneError('élément <g> non pris en charge');
+      inCut = true;
+      continue;
+    }
     if (name !== 'rect' && name !== 'path')
       throw new SceneError(`élément <${name!}> non pris en charge`);
     if (!self) throw new SceneError(`<${name}> non vide`);
@@ -172,6 +240,12 @@ export function sceneFromSvg(svg: string): VectorScene {
       else if (!fill && a.get('stroke-linecap') === 'round') item.centerline = true;
     }
     if (!item.fill && item.stroke === undefined) continue; // invisible
+    if (inCut) {
+      if (name !== 'path' || item.fill || item.stroke === undefined)
+        throw new SceneError('contour de découpe : trait sans remplissage attendu');
+      item.cutcontour = true;
+      delete item.centerline;
+    }
     if (name === 'rect') {
       const len = (v: string | undefined, full: number): number =>
         v === undefined ? 0 : v === '100%' ? full : Number(v);
@@ -190,6 +264,7 @@ export function sceneFromSvg(svg: string): VectorScene {
         throw new SceneError(e instanceof Error ? e.message : String(e));
       }
     }
+    if (dx !== 0 || dy !== 0) translateSubpaths(item.subpaths, dx, dy);
     if (item.subpaths.length > 0) scene.items.push(item);
   }
   if (!scene) throw new SceneError('élément <svg> absent');
@@ -218,13 +293,27 @@ export function countSubpaths(scene: VectorScene, filter?: (it: SceneItem) => bo
   return n;
 }
 
+/** T95 — La scène sans le contour de découpe sticker (contrôle de découpe, séparations). */
+export function withoutCutContour(scene: VectorScene): VectorScene {
+  return scene.items.some((it) => it.cutcontour)
+    ? { ...scene, items: scene.items.filter((it) => !it.cutcontour) }
+    : scene;
+}
+
+/** T95 — Items du contour de découpe sticker, dans l'ordre du SVG. */
+export function cutContourItems(scene: VectorScene): SceneItem[] {
+  return scene.items.filter((it) => it.cutcontour === true);
+}
+
 /**
  * Éléments peints en PDF et en EPS : un trait masqué (F1) est omis, faute de masque simple
  * dans ces formats ; il ne doit jamais couvrir la transparence (README « Décisions », T32).
+ * T95 : le contour de découpe sticker n'est jamais peint (le PDF le trace à part).
  */
 export function paintedItems(scene: VectorScene): SceneItem[] {
   const out: SceneItem[] = [];
   for (const it of scene.items) {
+    if (it.cutcontour) continue; // T95 : un trait de découpe, jamais peint avec le dessin
     if (!it.masked) out.push(it);
     else if (it.fill) {
       const fillOnly: SceneItem = { rgb: it.rgb, fill: true, subpaths: it.subpaths };

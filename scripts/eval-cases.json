@@ -1,21 +1,360 @@
 {
-  "$comment": "Cas d'évaluation (T06) : fixture de test/fixtures → préréglage → surcharges d'options.",
+  "$comment": "Cas d'évaluation (T06) : fixture de test/fixtures → préréglage → surcharges d'options. T125b : `expected` = géométrie dessinée par le générateur (cercles cx, cy, r ; droites x0, y0, x1, y1 ; `fill` = couleur source du tracé mesuré), mesurée par `shapeDeviations`.",
   "cases": [
-    { "name": "logo-flat", "fixture": "logo-flat.png", "preset": "logo" },
-    { "name": "logo-aa", "fixture": "logo-aa.png", "preset": "logo" },
-    { "name": "logo-jpeg", "fixture": "logo-jpeg.jpg", "preset": "logo" },
-    { "name": "text", "fixture": "text.png", "preset": "line-art" },
-    { "name": "pixel-art", "fixture": "pixel-art.png", "preset": "pixel-art" },
-    { "name": "illustration", "fixture": "illustration.png", "preset": "illustration" },
-    { "name": "photo", "fixture": "photo.png", "preset": "photo" },
-    { "name": "alpha", "fixture": "alpha.png", "preset": "logo" },
-    { "name": "badge", "fixture": "badge.png", "preset": "logo" },
-    { "name": "icon-64", "fixture": "icon-64.png", "preset": "logo" },
+    {
+      "name": "logo-flat",
+      "fixture": "logo-flat.png",
+      "preset": "logo",
+      "expected": {
+        "circles": [
+          {
+            "cx": 70,
+            "cy": 70,
+            "r": 48,
+            "fill": "#1d3557"
+          },
+          {
+            "cx": 70,
+            "cy": 70,
+            "r": 28,
+            "fill": "#1d3557"
+          },
+          {
+            "cx": 80,
+            "cy": 185,
+            "r": 40,
+            "fill": "#2a9d8f"
+          }
+        ]
+      }
+    },
+    {
+      "name": "logo-aa",
+      "fixture": "logo-aa.png",
+      "preset": "logo",
+      "expected": {
+        "circles": [
+          {
+            "cx": 70,
+            "cy": 70,
+            "r": 48,
+            "fill": "#1d3557"
+          },
+          {
+            "cx": 70,
+            "cy": 70,
+            "r": 28,
+            "fill": "#1d3557"
+          },
+          {
+            "cx": 80,
+            "cy": 185,
+            "r": 40,
+            "fill": "#2a9d8f"
+          }
+        ]
+      }
+    },
+    {
+      "name": "logo-jpeg",
+      "fixture": "logo-jpeg.jpg",
+      "preset": "logo",
+      "expected": {
+        "circles": [
+          {
+            "cx": 70,
+            "cy": 70,
+            "r": 48,
+            "fill": "#1d3557"
+          },
+          {
+            "cx": 70,
+            "cy": 70,
+            "r": 28,
+            "fill": "#1d3557"
+          },
+          {
+            "cx": 80,
+            "cy": 185,
+            "r": 40,
+            "fill": "#2a9d8f"
+          }
+        ]
+      }
+    },
+    {
+      "name": "text",
+      "fixture": "text.png",
+      "preset": "line-art"
+    },
+    {
+      "name": "pixel-art",
+      "fixture": "pixel-art.png",
+      "preset": "pixel-art"
+    },
+    {
+      "name": "illustration",
+      "fixture": "illustration.png",
+      "preset": "illustration"
+    },
+    {
+      "name": "photo",
+      "fixture": "photo.png",
+      "preset": "photo"
+    },
+    {
+      "name": "alpha",
+      "fixture": "alpha.png",
+      "preset": "logo",
+      "expected": {
+        "circles": [
+          {
+            "cx": 56,
+            "cy": 56,
+            "r": 40,
+            "fill": "#dc3c3c"
+          },
+          {
+            "cx": 140,
+            "cy": 56,
+            "r": 36,
+            "fill": "#285ac8"
+          },
+          {
+            "cx": 140,
+            "cy": 56,
+            "r": 18,
+            "fill": "#285ac8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "badge",
+      "fixture": "badge.png",
+      "preset": "logo"
+    },
+    {
+      "name": "icon-64",
+      "fixture": "icon-64.png",
+      "preset": "logo"
+    },
     {
       "name": "line-drawing",
       "fixture": "line-drawing.png",
       "preset": "centerline",
-      "options": { "export": { "backgroundRect": true } }
+      "options": {
+        "export": {
+          "backgroundRect": true
+        }
+      }
+    },
+    {
+      "name": "anneau",
+      "fixture": "anneau.png",
+      "preset": "logo",
+      "expected": {
+        "circles": [
+          {
+            "cx": 128,
+            "cy": 128,
+            "r": 100,
+            "fill": "#1d3557"
+          },
+          {
+            "cx": 128,
+            "cy": 128,
+            "r": 60,
+            "fill": "#1d3557"
+          }
+        ]
+      }
+    },
+    {
+      "name": "anneau-barre",
+      "fixture": "anneau-barre.png",
+      "preset": "logo",
+      "expected": {
+        "circles": [
+          {
+            "cx": 128,
+            "cy": 128,
+            "r": 100,
+            "fill": "#1d3557"
+          },
+          {
+            "cx": 128,
+            "cy": 128,
+            "r": 60,
+            "fill": "#1d3557"
+          }
+        ],
+        "lines": [
+          {
+            "x0": 8,
+            "y0": 112,
+            "x1": 248,
+            "y1": 112,
+            "fill": "#e63946"
+          },
+          {
+            "x0": 8,
+            "y0": 144,
+            "x1": 248,
+            "y1": 144,
+            "fill": "#e63946"
+          },
+          {
+            "x0": 8,
+            "y0": 112,
+            "x1": 8,
+            "y1": 144,
+            "fill": "#e63946"
+          },
+          {
+            "x0": 248,
+            "y0": 112,
+            "x1": 248,
+            "y1": 144,
+            "fill": "#e63946"
+          }
+        ]
+      }
+    },
+    {
+      "name": "lettres-geo",
+      "fixture": "lettres-geo.png",
+      "preset": "logo",
+      "expected": {
+        "circles": [
+          {
+            "cx": 70,
+            "cy": 70,
+            "r": 50,
+            "fill": "#000000"
+          },
+          {
+            "cx": 70,
+            "cy": 70,
+            "r": 30,
+            "fill": "#000000"
+          },
+          {
+            "cx": 190,
+            "cy": 70,
+            "r": 50,
+            "fill": "#000000"
+          },
+          {
+            "cx": 190,
+            "cy": 70,
+            "r": 30,
+            "fill": "#000000"
+          },
+          {
+            "cx": 290,
+            "cy": 70,
+            "r": 50,
+            "fill": "#000000"
+          },
+          {
+            "cx": 290,
+            "cy": 70,
+            "r": 30,
+            "fill": "#000000"
+          }
+        ],
+        "lines": [
+          {
+            "x0": 211.2132,
+            "y0": 48.7868,
+            "x1": 225.3553,
+            "y1": 34.6447,
+            "fill": "#000000"
+          },
+          {
+            "x0": 211.2132,
+            "y0": 91.2132,
+            "x1": 225.3553,
+            "y1": 105.3553,
+            "fill": "#000000"
+          },
+          {
+            "x0": 260,
+            "y0": 20,
+            "x1": 260,
+            "y1": 120,
+            "fill": "#000000"
+          },
+          {
+            "x0": 260,
+            "y0": 20,
+            "x1": 290,
+            "y1": 20,
+            "fill": "#000000"
+          },
+          {
+            "x0": 260,
+            "y0": 120,
+            "x1": 290,
+            "y1": 120,
+            "fill": "#000000"
+          },
+          {
+            "x0": 280,
+            "y0": 40,
+            "x1": 280,
+            "y1": 100,
+            "fill": "#000000"
+          },
+          {
+            "x0": 280,
+            "y0": 40,
+            "x1": 290,
+            "y1": 40,
+            "fill": "#000000"
+          },
+          {
+            "x0": 280,
+            "y0": 100,
+            "x1": 290,
+            "y1": 100,
+            "fill": "#000000"
+          }
+        ]
+      }
+    },
+    {
+      "name": "text-nb",
+      "fixture": "text.png",
+      "preset": "black-white"
+    },
+    {
+      "name": "logo-aa-nb",
+      "fixture": "logo-aa.png",
+      "preset": "black-white",
+      "expected": {
+        "circles": [
+          {
+            "cx": 70,
+            "cy": 70,
+            "r": 48,
+            "fill": "#000"
+          },
+          {
+            "cx": 70,
+            "cy": 70,
+            "r": 28,
+            "fill": "#000"
+          },
+          {
+            "cx": 80,
+            "cy": 185,
+            "r": 40,
+            "fill": "#000"
+          }
+        ]
+      }
     }
   ]
 }

@@ -6,6 +6,7 @@ import { presetOptions } from '../src/engine/presets.ts';
 import type { LabelMap, ProgressEvent, QuantizeResult } from '../src/engine/types.ts';
 import { CancelledError } from '../src/engine/types.ts';
 import { labelsToAscii, quantFromAscii, randomQuant } from './label-helpers.ts';
+import { assertWithinBudget, measureReference, perfBudget, printBudget } from './perf-budget.ts';
 
 const OPT = (minRegionArea: number) => ({ minRegionArea, connectivity: 4 as const });
 
@@ -290,7 +291,7 @@ describe('absorbSmallRegions en tableaux typés (F1, #18 point 3)', () => {
     expect(h).toBe(649803089);
   });
 
-  it('(lent) bruit blanc 24 niveaux 2048² : segment < 10 s, pic de tas < 1 Go', () => {
+  it('(lent) bruit blanc 24 niveaux 2048² : segment < 10 s (× facteur de la machine, T102), pic de tas < 1 Go', () => {
     const S = 2048;
     const rand = mulberry32(1);
     const colorIndex = new Int16Array(S * S);
@@ -318,12 +319,14 @@ describe('absorbSmallRegions en tableaux typés (F1, #18 point 3)', () => {
         },
       },
     };
+    // T102 : budget nominal 10 s × facteur de la machine (référence chronométrée juste avant).
+    const budget = perfBudget(10_000, measureReference());
     const t0 = performance.now();
     const map = segment(q, S, S, presetOptions('logo').segment, ctx);
     const ms = performance.now() - t0;
     sample();
     expect(map.regions.length).toBe(208494);
-    expect(ms).toBeLessThan(10_000);
+    printBudget(assertWithinBudget('segment, bruit blanc 2048²', ms, budget));
     expect(peak).toBeLessThan(1e9);
   }, 60_000);
 });

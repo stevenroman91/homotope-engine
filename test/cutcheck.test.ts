@@ -200,7 +200,7 @@ describe('contrôle de découpe : cas synthétiques', () => {
       // Exactement le diamètre : la lame passe.
       expect(check(dumbbell(2)).totals.thin).toBe(0);
     });
-    it('les coins droits et les jonctions ne sont pas des détails fins ; une pointe aiguë l’est', () => {
+    it('les coins droits, les jonctions et (T63) les pointes ne sont pas des détails fins', () => {
       // Carré : coins à 90°.
       expect(check('<path fill="#000" d="M10 10H40V40H10Z"/>', { toolMm: 2 }).totals.thin).toBe(0);
       // Trois faces en Y (120°).
@@ -208,9 +208,10 @@ describe('contrôle de découpe : cas synthétiques', () => {
         '<path fill="#000" d="M50 50L50 0H0V79Z"/><path fill="#0f0" d="M50 50L0 79V100H100V79Z"/>' +
         '<path fill="#00f" d="M50 50L100 79V0H50Z"/>';
       expect(check(y, { toolMm: 2 }).totals.thin).toBe(0);
-      // Pointe de ~11° (dent de scie) : l'outil l'émousse sur bien plus que son diamètre.
+      // Pointe de ~5° (dent de scie) : T35 la signalait ; T63 : l'outil l'arrondit, ce n'est pas
+      // un défaut (une pointe a toujours une largeur qui tend vers zéro à son bout).
       const spike = '<path fill="#000" d="M10 90L50 10L18 90Z"/>';
-      expect(check(spike, { toolMm: 0.5 }).totals.thin).toBe(1);
+      expect(check(spike, { toolMm: 0.5 }).totals.thin).toBe(0);
       // Pointe de 60° : non.
       const tri = '<path fill="#000" d="M10 90L50 20.72L90 90Z"/>';
       expect(check(tri, { toolMm: 0.5 }).totals.thin).toBe(0);

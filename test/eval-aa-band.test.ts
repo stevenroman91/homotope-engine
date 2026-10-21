@@ -125,6 +125,7 @@ describe('trait anti-liseré au rendu (T08)', () => {
       lineTolerance: 0.5,
       smoothingReach: 0,
       robustLines: false,
+      exactShapes: false,
       pixelArt: true,
     }).map((fc) => ({
       ...fc,

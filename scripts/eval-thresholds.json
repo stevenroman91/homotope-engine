@@ -1,29 +1,35 @@
 {
-  "$comment": "Seuils de `npm run eval -- --check`. Posés par T06, resserrés par T07 puis par T08 aux valeurs atteintes (SSIM : valeur − 10 % de l’écart à 1, jamais sous la cible du ticket ; erreur moyenne × 1,1 ; nœuds/octets × 1,3) ; 0 liseré partout, topologie exacte partout sauf `badge` (limite connue, README). On ne les élargit JAMAIS (test « seuils T08 »). T33 : `line-drawing` (centre-ligne) posé par la même règle sur le prototype mesuré. meanErrorMax : distance RGB euclidienne moyenne (0..441).",
+  "$comment": "Seuils de `npm run eval -- --check`. Posés par T06, resserrés par T07 puis par T08 aux valeurs atteintes (SSIM : valeur − 10 % de l’écart à 1, jamais sous la cible du ticket ; erreur moyenne × 1,1 ; nœuds/octets × 1,3) ; 0 liseré partout, topologie exacte partout sauf `badge` (limite connue, README). On ne les élargit JAMAIS (test « seuils T08 »). T33 : `line-drawing` (centre-ligne) posé par la même règle sur le prototype mesuré. meanErrorMax : distance RGB euclidienne moyenne (0..441). T125b : formes exactes (`circleDeviationMax` px, `concaveTurnsMax` °, `lineDeviationMax` px) posées sur le moteur ACTUEL par la règle « erreur × 1,1 » (arrondi au-dessus), sur les cas qui déclarent `expected` seulement ; `anneau`, `anneau-barre`, `lettres-geo` reçoivent aussi les seuils généraux par la règle de T08. T125a : `text-nb` et `logo-aa-nb` (préréglage Noir et blanc) posés par les mêmes règles sur le moteur SANS `fit.exactShapes`. T125c : `anneau-barre` cercle et droite resserrés aux valeurs atteintes × 1,1 (sommets partagés posés sur les formes). T125d : TOUS les cas resserrés aux valeurs atteintes par le moteur T125a–c (mêmes règles ; un seuil que la règle élargirait reste tel quel).",
   "fixtures": {
     "logo-flat": {
-      "ssimMin": 0.982,
-      "meanErrorMax": 1.58,
+      "ssimMin": 0.989,
+      "meanErrorMax": 1.24,
       "seamsMax": 0,
       "holesExact": true,
       "nodesMax": 45,
-      "bytesMax": 985
+      "bytesMax": 985,
+      "circleDeviationMax": 0.025,
+      "concaveTurnsMax": 0
     },
     "logo-aa": {
-      "ssimMin": 0.991,
-      "meanErrorMax": 0.99,
+      "ssimMin": 0.996,
+      "meanErrorMax": 0.67,
       "seamsMax": 0,
       "holesExact": true,
       "nodesMax": 45,
-      "bytesMax": 987
+      "bytesMax": 987,
+      "circleDeviationMax": 0.025,
+      "concaveTurnsMax": 0
     },
     "logo-jpeg": {
-      "ssimMin": 0.974,
-      "meanErrorMax": 2.7,
+      "ssimMin": 0.978,
+      "meanErrorMax": 2.43,
       "seamsMax": 0,
       "holesExact": true,
       "nodesMax": 43,
-      "bytesMax": 907
+      "bytesMax": 907,
+      "circleDeviationMax": 0.088,
+      "concaveTurnsMax": 0
     },
     "text": {
       "ssimMin": 0.97,
@@ -31,7 +37,7 @@
       "seamsMax": 0,
       "holesExact": true,
       "nodesMax": 169,
-      "bytesMax": 3241
+      "bytesMax": 3221
     },
     "pixel-art": {
       "ssimMin": 0.9999,
@@ -58,28 +64,30 @@
       "bytesMax": 24836
     },
     "alpha": {
-      "ssimMin": 0.988,
-      "meanErrorMax": 1.73,
+      "ssimMin": 0.993,
+      "meanErrorMax": 0.96,
       "seamsMax": 0,
       "holesExact": true,
       "nodesMax": 58,
-      "bytesMax": 1536
+      "bytesMax": 1536,
+      "circleDeviationMax": 1.143,
+      "concaveTurnsMax": 160.2
     },
     "badge": {
-      "ssimMin": 0.947,
-      "meanErrorMax": 9.47,
+      "ssimMin": 0.955,
+      "meanErrorMax": 8.79,
       "seamsMax": 0,
       "holesExact": false,
       "nodesMax": 215,
       "bytesMax": 2946
     },
     "icon-64": {
-      "ssimMin": 0.939,
-      "meanErrorMax": 13.53,
+      "ssimMin": 0.95,
+      "meanErrorMax": 12.93,
       "seamsMax": 0,
       "holesExact": true,
-      "nodesMax": 115,
-      "bytesMax": 2832
+      "nodesMax": 111,
+      "bytesMax": 2649
     },
     "line-drawing": {
       "ssimMin": 0.98,
@@ -88,6 +96,56 @@
       "holesExact": true,
       "nodesMax": 123,
       "bytesMax": 3723
+    },
+    "anneau": {
+      "ssimMin": 0.998,
+      "meanErrorMax": 0.31,
+      "seamsMax": 0,
+      "holesExact": true,
+      "nodesMax": 16,
+      "bytesMax": 588,
+      "circleDeviationMax": 0.042,
+      "concaveTurnsMax": 0
+    },
+    "anneau-barre": {
+      "ssimMin": 0.998,
+      "meanErrorMax": 0.44,
+      "seamsMax": 0,
+      "holesExact": true,
+      "nodesMax": 72,
+      "bytesMax": 1101,
+      "circleDeviationMax": 0.623,
+      "concaveTurnsMax": 0,
+      "lineDeviationMax": 0.509
+    },
+    "lettres-geo": {
+      "ssimMin": 0.991,
+      "meanErrorMax": 1.42,
+      "seamsMax": 0,
+      "holesExact": true,
+      "nodesMax": 42,
+      "bytesMax": 1224,
+      "circleDeviationMax": 1.365,
+      "concaveTurnsMax": 52.2,
+      "lineDeviationMax": 0.81
+    },
+    "text-nb": {
+      "ssimMin": 0.965,
+      "meanErrorMax": 3.93,
+      "seamsMax": 0,
+      "holesExact": true,
+      "nodesMax": 328,
+      "bytesMax": 5850
+    },
+    "logo-aa-nb": {
+      "ssimMin": 0.622,
+      "meanErrorMax": 61.34,
+      "seamsMax": 0,
+      "holesExact": true,
+      "nodesMax": 78,
+      "bytesMax": 1547,
+      "circleDeviationMax": 0.025,
+      "concaveTurnsMax": 0
     }
   }
 }

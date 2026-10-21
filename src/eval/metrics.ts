@@ -7,7 +7,9 @@
  */
 import { Resvg } from '@resvg/resvg-js';
 import { rgbaToOklabArray, rgbToOklab } from '../engine/color/oklab.ts';
+import { flattenSubpath } from '../engine/export/polyline.ts';
 import { segment } from '../engine/segment/index.ts';
+import { parsePathData, type ParsedSubpath } from '../engine/svg/parse.ts';
 import { countHoles } from '../engine/topology/index.ts';
 import type { LabelMap, Palette, RasterImage, Rgb } from '../engine/types.ts';
 
@@ -722,4 +724,342 @@ export function diffImage(
     out[p + 3] = 255;
   }
   return { width: source.width, height: source.height, data: out };
+}
+
+// ---------------------------------------------------------------------------
+// Formes exactes (T125b) : écart au cercle parfait, virages concaves, écart à la droite
+// ---------------------------------------------------------------------------
+
+/** Cercle attendu (coordonnées du SVG = pixels de l'image source), peint de `fill` dans la source. */
+export interface ExpectedCircle {
+  cx: number;
+  cy: number;
+  r: number;
+  /** Couleur source `#rrggbb` : on lit le `<path>` du SVG de couleur la plus proche. */
+  fill: string;
+}
+
+/** Segment de droite attendu, peint de `fill` dans la source (même règle que le cercle). */
+export interface ExpectedLine {
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
+  fill: string;
+}
+
+/** Géométrie attendue d'un cas d'évaluation (`EvalCase.expected`). */
+export interface ExpectedShapes {
+  circles?: ExpectedCircle[];
+  lines?: ExpectedLine[];
+}
+
+/**
+ * Bande d'attribution (px du SVG) : un point du tracé compte pour la forme attendue la plus
+ * proche s'il en est à moins de `SHAPE_BAND`. Au-delà, c'est une autre forme (un coin, une
+ * contre-forme) ; un écart réel plus grand qu'elle sortirait de la mesure (voir README).
+ */
+export const SHAPE_BAND = 2;
+/** Pas du rééchantillonnage avant les virages (px), celui de `test/logo-robust.test.ts`. */
+const TURN_STEP = 2;
+/**
+ * Plancher d'un virage concave (rad), lié à la précision du SVG émis : à 2 décimales
+ * (`export.precision` des préréglages), chaque point est à ±0,005 px près ; un virage mesuré
+ * sur trois points espacés de `TURN_STEP` (2 px) en est faussé d'au plus 4 × 0,005 / 2 =
+ * 0,01 rad (≈ 0,57°). Un polygone fin d'un cercle de rayon 600 arrondi ainsi comptait 15,7° de
+ * « virages concaves » sans aucun défaut (test). Une vraie bosse d'un pixel tourne d'un ordre de
+ * grandeur de plus (≈ 5° par pas) ; l'ondulation fine reste vue par l'écart au cercle.
+ */
+const TURN_EPS = 0.01;
+/** Tolérance de l'aplatissement des cubiques (px), celle de `test/logo-robust.test.ts`. */
+const FLATTEN_TOLERANCE = 0.01;
+/** Espacement maximal des points le long d'une arête droite (px). */
+const DENSIFY_STEP = 0.25;
+
+/** Suite de points d'une forme, dans l'ordre du tracé ; `cyclic` : la suite se referme. */
+export interface ShapeRun {
+  pts: number[];
+  cyclic: boolean;
+}
+
+export interface CircleMeasure {
+  cx: number;
+  cy: number;
+  r: number;
+  /** Points du tracé attribués au cercle (0 : forme perdue, écart infini). */
+  points: number;
+  /** Rayon crête à crête (max − min de la distance au centre attendu), px. */
+  deviation: number;
+  /** Somme des virages concaves (degrés) le long des arcs attribués. */
+  concaveTurns: number;
+}
+
+export interface LineMeasure {
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
+  points: number;
+  /** Écart max (px) d'un point attribué à la droite attendue. */
+  deviation: number;
+}
+
+export interface ShapeReport {
+  /** Pire rayon crête à crête parmi les cercles attendus (0 sans cercle). */
+  circleDeviationMax: number;
+  /** Somme des virages concaves de tous les cercles attendus (degrés). */
+  concaveTurns: number;
+  /** Pire écart à une droite attendue (0 sans droite). */
+  lineDeviationMax: number;
+  circles: CircleMeasure[];
+  lines: LineMeasure[];
+}
+
+/** Distance du point (px, py) au segment [a, b]. */
+function segmentDistance(px: number, py: number, l: ExpectedLine): number {
+  const vx = l.x1 - l.x0;
+  const vy = l.y1 - l.y0;
+  const l2 = vx * vx + vy * vy;
+  const t = l2 > 0 ? Math.max(0, Math.min(1, ((px - l.x0) * vx + (py - l.y0) * vy) / l2)) : 0;
+  return Math.hypot(px - l.x0 - t * vx, py - l.y0 - t * vy);
+}
+
+/** Rayon crête à crête des points des suites autour du centre (cx, cy) ; Infinity sans point. */
+export function circleDeviation(runs: readonly ShapeRun[], c: { cx: number; cy: number }): number {
+  let lo = Infinity;
+  let hi = -Infinity;
+  for (const run of runs) {
+    for (let i = 0; i < run.pts.length; i += 2) {
+      const d = Math.hypot(run.pts[i]! - c.cx, run.pts[i + 1]! - c.cy);
+      if (d < lo) lo = d;
+      if (d > hi) hi = d;
+    }
+  }
+  return hi >= lo ? hi - lo : Infinity;
+}
+
+/**
+ * Somme des virages CONCAVES (degrés) le long des suites, rééchantillonnées tous les
+ * `TURN_STEP` px : un virage est concave s'il tourne à l'opposé du sens de parcours autour du
+ * centre (un arc de cercle ne tourne que d'un côté, une bosse ou un creux tourne des deux).
+ * Indépendant du sens du tracé et de la face (bord extérieur ou contre-forme).
+ */
+export function concaveTurns(runs: readonly ShapeRun[], c: { cx: number; cy: number }): number {
+  let total = 0;
+  for (const run of runs) {
+    const p = run.pts;
+    if (p.length < 6) continue;
+    const q: [number, number][] = [[p[0]!, p[1]!]];
+    for (let i = 2; i < p.length; i += 2) {
+      const [lx, ly] = q[q.length - 1]!;
+      if (Math.hypot(p[i]! - lx, p[i + 1]! - ly) >= TURN_STEP) q.push([p[i]!, p[i + 1]!]);
+    }
+    if (run.cyclic) {
+      while (
+        q.length > 3 &&
+        Math.hypot(q.at(-1)![0] - q[0]![0], q.at(-1)![1] - q[0]![1]) < TURN_STEP * 0.75
+      ) {
+        q.pop();
+      }
+    } else {
+      const last: [number, number] = [p[p.length - 2]!, p[p.length - 1]!];
+      const [lx, ly] = q[q.length - 1]!;
+      if (lx !== last[0] || ly !== last[1]) q.push(last);
+    }
+    const n = q.length;
+    if (n < 3) continue;
+    const from = run.cyclic ? 0 : 1;
+    const to = run.cyclic ? n : n - 1;
+    for (let i = from; i < to; i++) {
+      const a = q[(i - 1 + n) % n]!;
+      const b = q[i]!;
+      const d = q[(i + 1) % n]!;
+      const ux = b[0] - a[0];
+      const uy = b[1] - a[1];
+      const vx = d[0] - b[0];
+      const vy = d[1] - b[1];
+      const turn = Math.atan2(ux * vy - uy * vx, ux * vx + uy * vy);
+      // Sens de parcours autour du centre, de a à d.
+      const around = (a[0] - c.cx) * (d[1] - c.cy) - (a[1] - c.cy) * (d[0] - c.cx);
+      if (turn * around < 0 && Math.abs(turn) > TURN_EPS) total += (Math.abs(turn) * 180) / Math.PI;
+    }
+  }
+  return total;
+}
+
+/** Écart max des points des suites au segment attendu ; Infinity sans point. */
+export function lineDeviation(runs: readonly ShapeRun[], l: ExpectedLine): number {
+  let hi = -Infinity;
+  for (const run of runs) {
+    for (let i = 0; i < run.pts.length; i += 2) {
+      hi = Math.max(hi, segmentDistance(run.pts[i]!, run.pts[i + 1]!, l));
+    }
+  }
+  return hi >= 0 ? hi : Infinity;
+}
+
+function hexRgb(h: string): Rgb {
+  const s = h.replace(/^#/, '');
+  const full = s.length === 3 ? [...s].map((c) => c + c).join('') : s;
+  return [
+    parseInt(full.slice(0, 2), 16),
+    parseInt(full.slice(2, 4), 16),
+    parseInt(full.slice(4, 6), 16),
+  ];
+}
+
+/**
+ * Sous-tracés du `<path>` rempli du SVG dont la couleur est la plus proche de `fill` (RGB). Le
+ * PREMIER chemin de cette couleur seulement (précédent `pathOf`) : les préréglages fusionnent
+ * les tracés d'une couleur (`export.mergeByColor`) ; avec `mergeByColor: false`, les autres
+ * chemins de la même couleur ne seraient pas lus.
+ */
+export function subpathsOfFill(svg: string, fill: string): ParsedSubpath[] {
+  const want = hexRgb(fill);
+  let best: ParsedSubpath[] = [];
+  let bestD = Infinity;
+  for (const m of svg.matchAll(
+    /<path\b[^>]*?\bfill="#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})"[^>]*?\bd="([^"]*)"/g,
+  )) {
+    const c = hexRgb(m[1]!);
+    const d = Math.hypot(c[0] - want[0], c[1] - want[1], c[2] - want[2]);
+    if (d < bestD) {
+      bestD = d;
+      best = parsePathData(m[2]!);
+    }
+  }
+  return best;
+}
+
+/**
+ * Points intermédiaires tous les `DENSIFY_STEP` px au plus sur chaque arête de la polyligne :
+ * `flattenSubpath` n'échantillonne que les cubiques, une corde droite (`L`) posée sur un arc
+ * n'aurait que ses deux bouts, sur le cercle, et sa flèche échapperait à la mesure.
+ */
+function densify(p: Float64Array, closed: boolean): Float64Array {
+  const n = p.length / 2;
+  const out: number[] = [];
+  const edges = closed ? n : n - 1;
+  for (let i = 0; i < n; i++) {
+    const x = p[2 * i]!;
+    const y = p[2 * i + 1]!;
+    out.push(x, y);
+    if (i >= edges) continue;
+    const j = (i + 1) % n;
+    const dx = p[2 * j]! - x;
+    const dy = p[2 * j + 1]! - y;
+    const steps = Math.ceil(Math.hypot(dx, dy) / DENSIFY_STEP);
+    for (let k = 1; k < steps; k++) out.push(x + (dx * k) / steps, y + (dy * k) / steps);
+  }
+  return Float64Array.from(out);
+}
+
+/**
+ * Suites de points d'une forme : chaque point aplati (`flattenSubpath`, 0,01 px) est attribué
+ * (puis densifié, `densify`) à la forme attendue la PLUS PROCHE (cercle : |distance au centre − r| ; droite : distance au
+ * segment) si elle est à moins de `band` ; les points consécutifs attribués à `target` forment
+ * une suite (un sous-tracé fermé entièrement attribué est une suite cyclique).
+ */
+function runsOf(
+  subpaths: readonly ParsedSubpath[],
+  shapes: readonly ((x: number, y: number) => number)[],
+  target: number,
+  band: number,
+): ShapeRun[] {
+  const out: ShapeRun[] = [];
+  for (const sp of subpaths) {
+    const p = densify(flattenSubpath(sp, FLATTEN_TOLERANCE), sp.closed);
+    const n = p.length / 2;
+    const mine = new Uint8Array(n);
+    let count = 0;
+    for (let i = 0; i < n; i++) {
+      const x = p[2 * i]!;
+      const y = p[2 * i + 1]!;
+      let best = -1;
+      let bestD = band;
+      for (let k = 0; k < shapes.length; k++) {
+        const d = shapes[k]!(x, y);
+        if (d <= bestD) {
+          bestD = d;
+          best = k; // égalité : la dernière déclarée (une droite après les cercles)
+        }
+      }
+      if (best === target) {
+        mine[i] = 1;
+        count++;
+      }
+    }
+    if (count === 0) continue;
+    if (count === n && sp.closed) {
+      out.push({ pts: Array.from(p), cyclic: true });
+      continue;
+    }
+    // Départ sur un point non attribué (sous-tracé fermé) : aucune suite coupée en deux.
+    let start = 0;
+    if (sp.closed) while (mine[start]) start++;
+    let cur: number[] = [];
+    for (let k = 0; k < n; k++) {
+      const i = (start + k) % n;
+      if (mine[i]) cur.push(p[2 * i]!, p[2 * i + 1]!);
+      else if (cur.length > 0) {
+        out.push({ pts: cur, cyclic: false });
+        cur = [];
+      }
+    }
+    if (cur.length > 0) out.push({ pts: cur, cyclic: false });
+  }
+  return out;
+}
+
+/**
+ * Mesure la géométrie attendue sur le SVG émis : pour chaque forme, les sous-tracés du chemin
+ * de sa couleur, puis les points qui lui sont attribués (`runsOf`). Cercle : rayon crête à
+ * crête et virages concaves ; droite : écart max. Pur (aucune rastérisation).
+ */
+export function shapeDeviations(
+  svg: string,
+  expected: ExpectedShapes,
+  band = SHAPE_BAND,
+): ShapeReport {
+  const circles = expected.circles ?? [];
+  const lines = expected.lines ?? [];
+  const shapes: ((x: number, y: number) => number)[] = [
+    ...circles.map((c) => (x: number, y: number) => Math.abs(Math.hypot(x - c.cx, y - c.cy) - c.r)),
+    ...lines.map((l) => (x: number, y: number) => segmentDistance(x, y, l)),
+  ];
+  const byFill = new Map<string, ParsedSubpath[]>();
+  const subpaths = (fill: string): ParsedSubpath[] => {
+    let s = byFill.get(fill);
+    if (!s) byFill.set(fill, (s = subpathsOfFill(svg, fill)));
+    return s;
+  };
+  const circleOut: CircleMeasure[] = circles.map((c, k) => {
+    const runs = runsOf(subpaths(c.fill), shapes, k, band);
+    return {
+      cx: c.cx,
+      cy: c.cy,
+      r: c.r,
+      points: runs.reduce((s, r) => s + r.pts.length / 2, 0),
+      deviation: circleDeviation(runs, c),
+      concaveTurns: concaveTurns(runs, c),
+    };
+  });
+  const lineOut: LineMeasure[] = lines.map((l, k) => {
+    const runs = runsOf(subpaths(l.fill), shapes, circles.length + k, band);
+    return {
+      x0: l.x0,
+      y0: l.y0,
+      x1: l.x1,
+      y1: l.y1,
+      points: runs.reduce((s, r) => s + r.pts.length / 2, 0),
+      deviation: lineDeviation(runs, l),
+    };
+  });
+  return {
+    circleDeviationMax: circleOut.reduce((m, c) => Math.max(m, c.deviation), 0),
+    concaveTurns: circleOut.reduce((s, c) => s + c.concaveTurns, 0),
+    lineDeviationMax: lineOut.reduce((m, l) => Math.max(m, l.deviation), 0),
+    circles: circleOut,
+    lines: lineOut,
+  };
 }

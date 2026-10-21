@@ -1,13 +1,13 @@
 // T43 — Préréglage Logo net au rendu agrandi, JPEG ou PNG : portée du lissage (grands arcs) et
-// droites robustes (bords d'étoile), fonctions pures puis régression sur la démo de l'accueil
-// (`public/accueil/src/logo-web.jpg`, préréglage Logo SEUL).
-import { readFileSync } from 'node:fs';
+// droites robustes (bords d'étoile), fonctions pures puis régression sur l'ancienne démo de
+// l'accueil (emblème `logoSource`, JPEG qualité 70, préréglage Logo SEUL). T71 : l'accueil montre
+// un autre logo ; le JPEG d'origine est recalculé ici (`jpeg-js` est déterministe : mêmes octets).
 import { describe, expect, it } from 'vitest';
 import { quantize } from '../src/engine/color/quantize.ts';
 import { flattenSubpath } from '../src/engine/export/polyline.ts';
 import { fitChains, maxDeviationFromCurve, thinTolerances } from '../src/engine/fit/index.ts';
 import { leastSquaresLine, reachRadius, smoothCyclic } from '../src/engine/fit/polyline.ts';
-import { decodeJpeg } from '../src/engine/image/codec-node.ts';
+import { decodeJpeg, encodeJpeg } from '../src/engine/image/codec-node.ts';
 import { vectorize } from '../src/engine/pipeline.ts';
 import { presetOptions } from '../src/engine/presets.ts';
 import { preprocess } from '../src/engine/preprocess/index.ts';
@@ -15,7 +15,7 @@ import { segment } from '../src/engine/segment/index.ts';
 import { buildBoundaryGraph } from '../src/engine/topology/index.ts';
 import { parsePathData, type ParsedSubpath } from '../src/engine/svg/parse.ts';
 import type { RasterImage, VectorizeOptions } from '../src/engine/types.ts';
-import { logoSource } from '../scripts/lib/demo-sources.ts';
+import { LOGO_JPEG_QUALITY, logoSource } from '../scripts/lib/demo-sources.ts';
 
 /** Contour de treillis (coins de pixels) d'un disque de rayon r centré en (c, c), sens direct. */
 function digitalCircle(r: number, c: number): { x: Float64Array; y: Float64Array } {
@@ -234,15 +234,16 @@ function beforeT43(): VectorizeOptions {
   o.fit.cornerAngle = 60;
   o.fit.smoothingReach = 0;
   o.fit.robustLines = false;
+  o.fit.exactShapes = false; // T125a
   return o;
 }
 
-const jpeg = decodeJpeg(new Uint8Array(readFileSync('public/accueil/src/logo-web.jpg')));
 const png: RasterImage = logoSource();
+const jpeg = decodeJpeg(encodeJpeg(png, LOGO_JPEG_QUALITY));
 
 describe('préréglage Logo seul, logo-web (T43)', () => {
   for (const [name, image] of [
-    ['JPEG servi (logo-web.jpg)', jpeg],
+    ['JPEG qualité 70 (ancien logo-web.jpg)', jpeg],
     ['même dessin sans JPEG', png],
   ] as const) {
     it(`${name} : couronne ronde, étoile à bords droits, 5 couleurs`, () => {

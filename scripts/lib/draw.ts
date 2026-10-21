@@ -180,6 +180,26 @@ export function union(...shapes: Shape[]): Shape {
   };
 }
 
+/** (T125b) Différence `a` privée de `b` (b ne sort pas de la boîte de `a`). */
+export function difference(a: Shape, b: Shape): Shape {
+  return { bbox: a.bbox, contains: (x, y) => a.contains(x, y) && !b.contains(x, y) };
+}
+
+/**
+ * (T125b) Secteur angulaire illimité de sommet (cx, cy) : points dont l'angle (radians, repère
+ * y vers le bas, `atan2`) est dans [a0, a1], a0 ≥ −π, a1 ≤ π. Sert à couper une forme le long
+ * de deux rayons ; sa boîte n'est jamais lue (à combiner par `difference`).
+ */
+export function wedge(cx: number, cy: number, a0: number, a1: number): Shape {
+  return {
+    bbox: [-Infinity, -Infinity, Infinity, Infinity],
+    contains: (x, y) => {
+      const a = Math.atan2(y - cy, x - cx);
+      return a >= a0 && a <= a1;
+    },
+  };
+}
+
 /** Mise à l'échelle `k` puis translation (ox, oy) : p' = p·k + o. */
 export function transform(shape: Shape, k: number, ox = 0, oy = 0): Shape {
   const [a, b, c, d] = shape.bbox;

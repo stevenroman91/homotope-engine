@@ -9,6 +9,7 @@ import {
   Canvas,
   circlePoints,
   cubicPoints,
+  difference,
   disk,
   downsampleBox,
   ellipseRing,
@@ -21,6 +22,7 @@ import {
   strokeLine,
   transform,
   union,
+  wedge,
   type Shape,
 } from './draw.ts';
 
@@ -307,6 +309,75 @@ function lineDrawing(): RasterImage {
   return c.toRaster();
 }
 
+// ---------------------------------------------------------------------------
+// Formes exactes (T125b) : la géométrie dessinée ici est déclarée telle quelle dans
+// `scripts/eval-cases.json` (`expected`), mesurée par `shapeDeviations`.
+// ---------------------------------------------------------------------------
+
+/** Couleurs des fixtures de formes exactes (celles du logo : marine, rouge sur blanc). */
+export const EXACT_COLORS = { ring: LOGO_COLORS.navy, bar: LOGO_COLORS.red, ink: BLACK } as const;
+
+/** Anneau de `anneau` et `anneau-barre` : centre (128, 128), rayons 60 et 100. */
+export const ANNEAU = { cx: 128, cy: 128, rInner: 60, rOuter: 100 } as const;
+/** Barre horizontale de `anneau-barre` : [x0, y0, x1, y1]. */
+export const ANNEAU_BARRE: readonly [number, number, number, number] = [8, 112, 248, 144];
+
+/** Anneau seul, 256×256, anti-aliasé (4×4 échantillons) : deux cercles concentriques fermés. */
+function anneau(): RasterImage {
+  const { cx, cy, rInner, rOuter } = ANNEAU;
+  return new Canvas(256, 256)
+    .background(WHITE)
+    .fill(ring(cx, cy, rInner, rOuter), EXACT_COLORS.ring, { ss: 4 })
+    .toRaster();
+}
+
+/**
+ * Anneau coupé par une barre droite d'une autre couleur : les deux cercles deviennent quatre
+ * arcs OUVERTS entre des sommets partagés par trois faces (anneau, barre, fond).
+ */
+function anneauBarre(): RasterImage {
+  const { cx, cy, rInner, rOuter } = ANNEAU;
+  const [x0, y0, x1, y1] = ANNEAU_BARRE;
+  return new Canvas(256, 256)
+    .background(WHITE)
+    .fill(ring(cx, cy, rInner, rOuter), EXACT_COLORS.ring, { ss: 4 })
+    .fill(rect(x0, y0, x1, y1), EXACT_COLORS.bar, { ss: 4 })
+    .toRaster();
+}
+
+/**
+ * Lettres géométriques O, C, D (360×140, encre noire, anti-aliasées), dessinées en formes
+ * pleines comme le logo de T122 : rayons 30 et 50, centre des lettres à y = 70.
+ * O : anneau ; C : anneau ouvert à droite entre −45° et 45° (coupes radiales droites) ;
+ * D : fût à gauche puis demi-anneau à droite (droites tangentes aux arcs).
+ */
+export const LETTRES_GEO = { cy: 70, rInner: 30, rOuter: 50, oX: 70, cX: 190, dX0: 260, dXc: 290 };
+
+function lettresGeo(): RasterImage {
+  const { cy, rInner, rOuter, oX, cX, dX0, dXc } = LETTRES_GEO;
+  const q = Math.PI / 4;
+  const dOuter: Shape = {
+    bbox: [dX0, cy - rOuter, dXc + rOuter, cy + rOuter],
+    contains: (x, y) =>
+      x >= dX0 && Math.abs(y - cy) < rOuter && (x < dXc || Math.hypot(x - dXc, y - cy) < rOuter),
+  };
+  const dCounter: Shape = {
+    bbox: [dX0 + 20, cy - rInner, dXc + rInner, cy + rInner],
+    contains: (x, y) =>
+      x >= dX0 + 20 &&
+      Math.abs(y - cy) < rInner &&
+      (x < dXc || Math.hypot(x - dXc, y - cy) < rInner),
+  };
+  return new Canvas(360, 140)
+    .background(WHITE)
+    .fill(ring(oX, cy, rInner, rOuter), EXACT_COLORS.ink, { ss: 4 })
+    .fill(difference(ring(cX, cy, rInner, rOuter), wedge(cX, cy, -q, q)), EXACT_COLORS.ink, {
+      ss: 4,
+    })
+    .fill(difference(dOuter, dCounter), EXACT_COLORS.ink, { ss: 4 })
+    .toRaster();
+}
+
 export const FIXTURES: readonly FixtureSpec[] = [
   { file: 'logo-flat.png', format: 'png', build: () => renderLogo(1) },
   { file: 'logo-aa.png', format: 'png', build: logoAa },
@@ -319,4 +390,7 @@ export const FIXTURES: readonly FixtureSpec[] = [
   { file: 'badge.png', format: 'png', build: badge },
   { file: 'icon-64.png', format: 'png', build: icon64 },
   { file: 'line-drawing.png', format: 'png', build: lineDrawing },
+  { file: 'anneau.png', format: 'png', build: anneau },
+  { file: 'anneau-barre.png', format: 'png', build: anneauBarre },
+  { file: 'lettres-geo.png', format: 'png', build: lettresGeo },
 ];

@@ -17,6 +17,7 @@ import {
   pixelError,
   rasterizeSvg,
   requantize,
+  shapeDeviations,
   ssim,
 } from '../src/eval/metrics.ts';
 import {
@@ -262,6 +263,7 @@ describe('conservation des trous', () => {
       lineTolerance: 0.5,
       smoothingReach: 0,
       robustLines: false,
+      exactShapes: false,
       pixelArt: true,
     });
     const { svg } = exportSvg(
@@ -337,5 +339,245 @@ describe('harnais', () => {
     expect(report.seams.count).toBe(0);
     expect(report.topology.exact).toBe(true);
     expect(report.topology.sourceHoles).toBeGreaterThanOrEqual(2); // O et A
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T125b — Formes exactes : écart au cercle parfait, virages concaves, écart à la droite
+// ---------------------------------------------------------------------------
+
+/** `<path>` d'un polygone fermé de points (x, y) donnés par `at(θ)`, `n` côtés. */
+function polygonSvg(n: number, at: (t: number) => [number, number], fill = '#000000'): string {
+  const pts: string[] = [];
+  for (let i = 0; i < n; i++) {
+    const [x, y] = at((2 * Math.PI * i) / n);
+    pts.push(`${i === 0 ? 'M' : 'L'}${x.toFixed(6)} ${y.toFixed(6)}`);
+  }
+  return `<svg xmlns="http://www.w3.org/2000/svg"><path fill="${fill}" d="${pts.join('')}Z"/></svg>`;
+}
+
+const ROUND = { cx: 100, cy: 100, r: 50, fill: '#000000' };
+const onCircle =
+  (r: (t: number) => number) =>
+  (t: number): [number, number] => [100 + r(t) * Math.cos(t), 100 + r(t) * Math.sin(t)];
+
+describe('formes exactes (T125b)', () => {
+  it('cercle parfait : écart 0, aucun virage concave', () => {
+    const m = shapeDeviations(
+      polygonSvg(
+        3600,
+        onCircle(() => 50),
+      ),
+      { circles: [ROUND] },
+    );
+    expect(m.circleDeviationMax).toBeLessThan(1e-4);
+    expect(m.concaveTurns).toBe(0);
+    expect(m.circles[0]!.points).toBe(3600);
+  });
+
+  it('cercle en 4 cubiques (kappa) : écart sous 0,03 % du rayon', () => {
+    const k = 0.5522847498 * 50;
+    const d =
+      `M150 100C150 ${100 + k} ${100 + k} 150 100 150C${100 - k} 150 50 ${100 + k} 50 100` +
+      `C50 ${100 - k} ${100 - k} 50 100 50C${100 + k} 50 150 ${100 - k} 150 100Z`;
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg"><path fill="#000" d="${d}"/></svg>`;
+    const m = shapeDeviations(svg, { circles: [ROUND] });
+    // 0,027 % du rayon (approximation kappa) + la flèche de l'aplatissement (0,01 px).
+    expect(m.circleDeviationMax).toBeLessThan(50 * 3e-4 + 0.01);
+    expect(m.concaveTurns).toBe(0);
+  });
+
+  it('cercle ondulé de 1 px crête à crête : écart 1', () => {
+    const svg = polygonSvg(
+      3600,
+      onCircle((t) => 50 + 0.5 * Math.sin(12 * t)),
+    );
+    const m = shapeDeviations(svg, { circles: [ROUND] });
+    expect(m.circleDeviationMax).toBeCloseTo(1, 3);
+    expect(m.concaveTurns).toBeGreaterThan(0);
+  });
+
+  it('polygone régulier : aucun virage concave, écart = flèche', () => {
+    const m = shapeDeviations(
+      polygonSvg(
+        24,
+        onCircle(() => 50),
+      ),
+      { circles: [ROUND] },
+    );
+    expect(m.concaveTurns).toBe(0);
+    expect(m.circleDeviationMax).toBeCloseTo(50 * (1 - Math.cos(Math.PI / 24)), 2);
+  });
+
+  it('cercle r = 300 en 4 cubiques, coordonnées à 2 décimales : aucun virage concave', () => {
+    // Bruit réaliste du SVG émis (precision 2, joints de cubiques kappa) : sous le plancher.
+    const r = 300;
+    const c = 400;
+    const k = 0.5522847498 * r;
+    const f = (v: number) => v.toFixed(2);
+    const d =
+      `M${f(c + r)} ${f(c)}C${f(c + r)} ${f(c + k)} ${f(c + k)} ${f(c + r)} ${f(c)} ${f(c + r)}` +
+      `C${f(c - k)} ${f(c + r)} ${f(c - r)} ${f(c + k)} ${f(c - r)} ${f(c)}` +
+      `C${f(c - r)} ${f(c - k)} ${f(c - k)} ${f(c - r)} ${f(c)} ${f(c - r)}` +
+      `C${f(c + k)} ${f(c - r)} ${f(c + r)} ${f(c - k)} ${f(c + r)} ${f(c)}Z`;
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg"><path fill="#000000" d="${d}"/></svg>`;
+    const m = shapeDeviations(svg, { circles: [{ cx: c, cy: c, r, fill: '#000000' }] });
+    expect(m.circles[0]!.points).toBeGreaterThan(1000);
+    expect(m.concaveTurns).toBe(0);
+  });
+
+  it('cercle décalé de 3 px : le décalage se voit (écart > 3 px), jamais masqué', () => {
+    const m = shapeDeviations(
+      polygonSvg(
+        720,
+        onCircle(() => 50),
+      ),
+      {
+        circles: [{ ...ROUND, cx: 103 }],
+      },
+    );
+    // Seuls les points à moins de 2 px du cercle attendu comptent ; ils suffisent à le dire.
+    expect(m.circleDeviationMax).toBeGreaterThan(3);
+  });
+
+  it('cercle r = 600 en polygone fin arrondi à 2 décimales : le bruit n’est pas un creux', () => {
+    // Rouge avec un plancher de 1e-9 rad (15,7°) ou de 0,05° (14,9°) ; vert au plancher dérivé.
+    const n = 3600;
+    const pts: string[] = [];
+    for (let i = 0; i < n; i++) {
+      const t = (2 * Math.PI * i) / n;
+      pts.push(
+        `${i ? 'L' : 'M'}${(650 + 600 * Math.cos(t)).toFixed(2)} ${(650 + 600 * Math.sin(t)).toFixed(2)}`,
+      );
+    }
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg"><path fill="#000000" d="${pts.join('')}Z"/></svg>`;
+    const m = shapeDeviations(svg, { circles: [{ cx: 650, cy: 650, r: 600, fill: '#000000' }] });
+    expect(m.concaveTurns).toBe(0);
+    expect(m.circleDeviationMax).toBeLessThan(0.02);
+  });
+
+  it('droite sans point attribué : écart infini', () => {
+    const m = shapeDeviations(
+      polygonSvg(
+        360,
+        onCircle(() => 50),
+      ),
+      {
+        lines: [{ x0: 0, y0: 0, x1: 10, y1: 0, fill: '#000000' }],
+      },
+    );
+    expect(m.lineDeviationMax).toBe(Infinity);
+  });
+
+  it('forme avec un creux : virages concaves > 0', () => {
+    // Creux de 1,5 px sur 30° (sous la bande d'attribution).
+    const dent = (t: number) => {
+      const u = (t - Math.PI) / (Math.PI / 12);
+      return Math.abs(u) < 1 ? 50 - 1.5 * Math.cos((u * Math.PI) / 2) ** 2 : 50;
+    };
+    const m = shapeDeviations(polygonSvg(720, onCircle(dent)), { circles: [ROUND] });
+    expect(m.concaveTurns).toBeGreaterThan(5);
+    expect(m.circleDeviationMax).toBeCloseTo(1.5, 2);
+  });
+
+  it('le sens du tracé (contre-forme) ne change rien', () => {
+    const fwd = shapeDeviations(
+      polygonSvg(
+        720,
+        onCircle(() => 50),
+      ),
+      { circles: [ROUND] },
+    );
+    const rev = shapeDeviations(
+      polygonSvg(720, (t) => onCircle(() => 50)(-t)),
+      { circles: [ROUND] },
+    );
+    expect(rev.concaveTurns).toBe(fwd.concaveTurns);
+    expect(rev.circleDeviationMax).toBeCloseTo(fwd.circleDeviationMax, 9);
+  });
+
+  it('anneau coupé par une barre : chaque point va à la forme la plus proche', () => {
+    // Arc supérieur d'un anneau (rayons 30 et 50) coupé à y = 90 : les côtés droits
+    // appartiennent aux droites déclarées, ni au cercle, ni à l'écart du cercle.
+    const pts: [number, number][] = [];
+    const a0 = Math.asin(10 / 50);
+    const a1 = Math.asin(10 / 30);
+    for (let i = 0; i <= 400; i++) {
+      const t = Math.PI + a0 + ((Math.PI - 2 * a0) * i) / 400;
+      pts.push([100 + 50 * Math.cos(t), 100 + 50 * Math.sin(t)]);
+    }
+    for (let i = 0; i <= 400; i++) {
+      const t = 2 * Math.PI - a1 - ((Math.PI - 2 * a1) * i) / 400;
+      pts.push([100 + 30 * Math.cos(t), 100 + 30 * Math.sin(t)]);
+    }
+    const d = pts.map(([x, y], i) => `${i ? 'L' : 'M'}${x} ${y}`).join('') + 'Z';
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg"><path fill="#000000" d="${d}"/></svg>`;
+    const m = shapeDeviations(svg, {
+      circles: [ROUND, { ...ROUND, r: 30 }],
+      lines: [
+        { x0: 40, y0: 90, x1: 75, y1: 90, fill: '#000000' },
+        { x0: 125, y0: 90, x1: 160, y1: 90, fill: '#000000' },
+      ],
+    });
+    expect(m.circleDeviationMax).toBeLessThan(1e-3);
+    expect(m.concaveTurns).toBe(0);
+    expect(m.lineDeviationMax).toBeLessThan(1e-9);
+    expect(m.lines.every((l) => l.points >= 2)).toBe(true);
+  });
+
+  it('forme perdue : écart infini, le seuil échoue', () => {
+    const m = shapeDeviations(
+      polygonSvg(
+        360,
+        onCircle(() => 50),
+      ),
+      {
+        circles: [{ ...ROUND, r: 20 }],
+      },
+    );
+    expect(m.circles[0]!.points).toBe(0);
+    expect(m.circleDeviationMax).toBe(Infinity);
+  });
+
+  it('checkThresholds lit les seuils de formes exactes', () => {
+    type Report = Parameters<typeof checkThresholds>[0];
+    const raw = {
+      name: 'x',
+      ssim: 1,
+      error: { meanRgb: 0 },
+      seams: { count: 0 },
+      topology: { exact: true, diffs: [] },
+      stats: { nodes: 1, bytes: 1 },
+    };
+    const shapes = { circleDeviationMax: 0.9, concaveTurns: 12, lineDeviationMax: 0.4 };
+    const report = { ...raw, shapes } as unknown as Report;
+    const base: Thresholds = {
+      ssimMin: 0,
+      meanErrorMax: 1,
+      seamsMax: 0,
+      holesExact: true,
+      nodesMax: 9,
+      bytesMax: 9,
+    };
+    expect(checkThresholds(report, base)).toEqual([]);
+    expect(
+      checkThresholds(report, {
+        ...base,
+        circleDeviationMax: 0.8,
+        concaveTurnsMax: 10,
+        lineDeviationMax: 0.3,
+      }),
+    ).toHaveLength(3);
+    expect(
+      checkThresholds(report, {
+        ...base,
+        circleDeviationMax: 1,
+        concaveTurnsMax: 13,
+        lineDeviationMax: 0.5,
+      }),
+    ).toEqual([]);
+    // Seuil de forme sans géométrie attendue : dépassement nommé, jamais un passage muet.
+    const bare = raw as unknown as Report;
+    expect(checkThresholds(bare, { ...base, circleDeviationMax: 1 })).toHaveLength(1);
   });
 });

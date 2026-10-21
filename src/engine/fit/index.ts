@@ -14,19 +14,23 @@ import {
 } from './bezier.ts';
 import {
   detectCorners,
-  leastSquaresLine,
   smoothCyclic,
   smoothingRadius,
   smoothRange,
   splitPoints,
 } from './polyline.ts';
+import { TAU, angularProgress, arcCubics } from './circle.ts';
+import { EXACT_MIN_SWEEP, ROBUST_SNAP, exactCircle, straightLine } from './shapes.ts';
+import { sharedVertexPositions } from './vertices.ts';
 import type { Span } from './schneider.ts';
 import {
   FitWorkspace,
   fitCubicRange,
   fitSingleCubic,
   fitSingleCubicMin,
+  lineSpan,
   measureError,
+  setCubic,
 } from './schneider.ts';
 
 /** Chaînes ajustées entre deux points de reprise (annulation, progression). */
@@ -48,13 +52,11 @@ const REFINE_GOAL = 0.55;
  */
 const REFINE_MIN_POINTS = 32;
 /**
- * T43 — Droites robustes (`robustLines`) : déplacement max d'un coin recalé, en fraction de
- * `tolerance`. Sous 1 : la courbe reste à moins de `tolerance` de la polyligne (garantie F1).
+ * Rayon (px de travail) sous lequel une cubique d'arc de 90° reste à moins de 0,01 px du cercle
+ * (écart max 0,027 % du rayon, toujours vers l'extérieur) ; au-delà, un arc prend des cubiques
+ * plus courtes. Sans cela, sur `anneau-barre` (r = 100), l'écart au cercle de T125b montait.
  */
-const ROBUST_SNAP = 0.95;
-/** Points minimum d'un tronçon pour que sa droite des moindres carrés soit fiable. */
-const ROBUST_LINE_MIN_POINTS = 16;
-
+const EXACT_ARC_REF = 37;
 /**
  * T04 — Ajustement d'UNE chaîne : lissage (sommets fixes), détection des coins,
  * segments droits, cubiques de Bézier (Schneider) avec tolérance, nœuds minimaux.
@@ -73,6 +75,10 @@ export function fitChain(chain: BoundaryChain, options: FitOptions): FittedChain
  * `tolerances` (T08, optionnel) : tolérance propre à chaque chaîne (indexée par
  * id), retenue si elle est plus stricte que `options.tolerance` (voir
  * `thinTolerances`).
+ *
+ * T125c — `exactShapes` (hors pixel art) : passe globale AVANT l'ajustement, les sommets
+ * partagés sont posés sur les formes exactes de leurs chaînes (`sharedVertexPositions`), une
+ * position par sommet écrite dans toutes ses chaînes ; le graphe n'est pas modifié.
  */
 export function fitChains(
   chains: BoundaryChain[],
@@ -83,17 +89,23 @@ export function fitChains(
   const ws = new FitWorkspace();
   const out: FittedChain[] = new Array<FittedChain>(chains.length);
   const n = chains.length;
+  const optionsOf = (i: number): FitOptions => {
+    const t = tolerances?.[chains[i]!.id];
+    return t !== undefined && t < options.tolerance
+      ? { ...options, tolerance: t, lineTolerance: Math.min(options.lineTolerance, t) }
+      : options;
+  };
+  const corners: (number[] | undefined)[] = [];
+  const ends =
+    options.exactShapes && !options.pixelArt
+      ? sharedVertexPositions(chains, optionsOf, corners, ctx)
+      : null;
   for (let i = 0; i < n; i++) {
     if (i % CANCEL_EVERY === 0) {
       checkCancel(ctx);
       ctx?.onProgress?.(globalProgress('fit', i / n));
     }
-    const t = tolerances?.[chains[i]!.id];
-    const o =
-      t !== undefined && t < options.tolerance
-        ? { ...options, tolerance: t, lineTolerance: Math.min(options.lineTolerance, t) }
-        : options;
-    out[i] = fitChainWith(chains[i]!, o, ws);
+    out[i] = fitChainWith(chains[i]!, optionsOf(i), ws, corners[i], ends, i);
   }
   checkCancel(ctx);
   ctx?.onProgress?.(globalProgress('fit', 1));
@@ -140,13 +152,28 @@ const BRY = 3;
 const BSX = 4;
 const BSY = 5;
 const BEXT = 6; // 6..9 : tableaux déroulés d'une île lisse
+const BTAU = 10; // 10..11 (T125a) : progression angulaire ; cubiques d'arc, puis le cercle
+const BARC = 11;
 
-function fitChainWith(chain: BoundaryChain, options: FitOptions, ws: FitWorkspace): FittedChain {
+/**
+ * `corners` : coins de la chaîne ouverte déjà détectés (T125c), sinon calculés ici. `ends` (T125c) :
+ * extrémités recalées de la chaîne `at` (`ends[4 at..4 at + 3]`, NaN = inchangée).
+ */
+function fitChainWith(
+  chain: BoundaryChain,
+  options: FitOptions,
+  ws: FitWorkspace,
+  corners?: number[],
+  ends?: Float64Array | null,
+  at = 0,
+): FittedChain {
   const p = chain.points;
   const cap = (p.length >> 1) + 1;
   const x = ws.buffer(BX, cap);
   const y = ws.buffer(BY, cap);
   let n = splitPoints(p, chain.closed, x, y);
+  // Chaîne réduite à un point : jamais une chaîne ouverte du graphe (≥ 2 points distincts), donc
+  // jamais un sommet recalé par T125c (`ends` n'est lu que par `fitOpen`).
   if (n <= 1) return { chain: chain.id, start: [p[0] ?? 0, p[1] ?? 0], segments: [] };
   let closed = chain.closed;
   if (closed && n < 3) {
@@ -158,8 +185,8 @@ function fitChainWith(chain: BoundaryChain, options: FitOptions, ws: FitWorkspac
   }
   if (options.pixelArt) return pixelArtChain(chain.id, x, y, n, closed);
   if (!closed) {
-    const { index } = detectCorners(x, y, n, false, options.cornerAngle);
-    return fitOpen(chain.id, x, y, n, [0, ...index, n - 1], options, ws);
+    const index = corners ?? detectCorners(x, y, n, false, options.cornerAngle).index;
+    return fitOpen(chain.id, x, y, n, [0, ...index, n - 1], options, ws, false, ends, 4 * at);
   }
   const { index, angle } = detectCorners(x, y, n, true, options.cornerAngle);
   if (index.length === 0) return fitClosedSmooth(chain.id, x, y, n, options, ws);
@@ -167,15 +194,27 @@ function fitChainWith(chain: BoundaryChain, options: FitOptions, ws: FitWorkspac
   let best = 0;
   for (let j = 1; j < angle.length; j++) if (angle[j]! > angle[best]!) best = j;
   const a = index[best]!;
+  const [rx, ry] = unroll(x, y, n, a, ws);
+  const breaks = index.map((i) => (i - a + n) % n).filter((i) => i > 0);
+  breaks.sort((u, v) => u - v);
+  return fitOpen(chain.id, rx, ry, n + 1, [0, ...breaks, n], options, ws, true);
+}
+
+/** Île de n points rouverte au point `a` : n + 1 points (fermeture comprise) dans `BRX`/`BRY`. */
+function unroll(
+  x: Float64Array,
+  y: Float64Array,
+  n: number,
+  a: number,
+  ws: FitWorkspace,
+): [Float64Array, Float64Array] {
   const rx = ws.buffer(BRX, n + 1);
   const ry = ws.buffer(BRY, n + 1);
   for (let k = 0; k <= n; k++) {
     rx[k] = x[(a + k) % n]!;
     ry[k] = y[(a + k) % n]!;
   }
-  const breaks = index.map((i) => (i - a + n) % n).filter((i) => i > 0);
-  breaks.sort((u, v) => u - v);
-  return fitOpen(chain.id, rx, ry, n + 1, [0, ...breaks, n], options, ws, true);
+  return [rx, ry];
 }
 
 /**
@@ -191,6 +230,8 @@ function fitOpen(
   opts: FitOptions,
   ws: FitWorkspace,
   cyclic = false,
+  ends?: Float64Array | null,
+  at = 0,
 ): FittedChain {
   const sx = ws.buffer(BSX, n);
   const sy = ws.buffer(BSY, n);
@@ -204,6 +245,16 @@ function fitOpen(
     }
   }
   if (opts.robustLines) snapCorners(ox, oy, sx, sy, breaks, opts, cyclic);
+  // T125c — Sommets partagés recalés (`sharedVertexPositions`) ; les points ORIGINAUX restent.
+  for (let k = 0; ends && k < 2; k++) {
+    const i = k * (n - 1);
+    const v = ends[at + 2 * k]!;
+    // NaN : extrémité inchangée.
+    if (v === v) {
+      sx[i] = v;
+      sy[i] = ends[at + 2 * k + 1]!;
+    }
+  }
   const spans: Span[] = [];
   const t = ws.tangents;
   for (let j = 0; j + 1 < breaks.length; j++) {
@@ -211,7 +262,11 @@ function fitOpen(
     const b = breaks[j + 1]!;
     const piece: Span[] = [];
     endTangents(sx, sy, a, b, t);
-    fitPiece(sx, sy, ox, oy, a, b, t[0]!, t[1]!, t[2]!, t[3]!, opts, ws, piece);
+    // Arc exact (T125a) : posé tel quel, ni fusion ni raffinement.
+    if (fitPiece(sx, sy, ox, oy, a, b, t[0]!, t[1]!, t[2]!, t[3]!, opts, ws, piece)) {
+      for (const s of piece) spans.push(s);
+      continue;
+    }
     mergeSpans(piece, sx, sy, ox, oy, opts, ws);
     if (refineSpans(piece, sx, sy, ox, oy, opts.tolerance, ws, 0)) {
       mergeSpans(piece, sx, sy, ox, oy, opts, ws);
@@ -239,6 +294,10 @@ function fitClosedSmooth(
   const r = smoothingRadius(opts.smoothing);
   const maxShift = 0.5 * Math.max(0, opts.tolerance);
   if (r > 0 && maxShift > 0) smoothCyclic(x, y, sx0, sy0, n, r, maxShift, opts.smoothingReach);
+  const exact: Span[] = [];
+  if (opts.exactShapes && exactShape(sx0, sy0, x, y, 0, n - 1, true, opts, ws, exact)) {
+    return toFitted(id, exact[3]!.ex!, exact[3]!.ey!, exact, x, y);
+  }
   // T08 — Ancre là où la tangente est la plus DIAGONALE : le point 0 d'une île
   // est son coin le plus haut à gauche, au milieu d'un palier d'extremum où le
   // lissage est biaisé ; une ancre (point de passage imposé) y faisait déborder
@@ -361,10 +420,6 @@ function dir(
   t[o + 1] = dy / l;
 }
 
-function lineSpan(a: number, b: number, t1x: number, t1y: number, t2x: number, t2y: number): Span {
-  return { i0: a, i1: b, cubic: false, c1x: 0, c1y: 0, c2x: 0, c2y: 0, t1x, t1y, t2x, t2y };
-}
-
 /**
  * Un tronçon est DROIT si ses points lissés restent à ≤ `lineTolerance` de la
  * corde ET ses points originaux à < `tolerance` (la fidélité reste bornée).
@@ -451,10 +506,7 @@ function snapCorners(
   const line = new Float64Array(4 * m);
   const straight = new Uint8Array(m);
   for (let j = 0; j < m; j++) {
-    if (breaks[j + 1]! - breaks[j]! < ROBUST_LINE_MIN_POINTS) continue;
-    const err = leastSquaresLine(ox, oy, breaks[j]!, breaks[j + 1]!, line, 4 * j);
-    const band = Math.abs(line[4 * j + 2]!) + Math.abs(line[4 * j + 3]!);
-    straight[j] = err < Math.min(opts.lineTolerance + 0.5 * band, opts.tolerance) ? 1 : 0;
+    straight[j] = straightLine(ox, oy, breaks[j]!, breaks[j + 1]!, opts, line, 4 * j) ? 1 : 0;
   }
   const cap = ROBUST_SNAP * opts.tolerance;
   for (let k = cyclic ? 0 : 1; k < m; k++) {
@@ -499,6 +551,7 @@ function snapCorners(
   }
 }
 
+/** Tronçon ajusté ; vrai s'il est posé en arc exact (T125a). */
 function fitPiece(
   sx: Float64Array,
   sy: Float64Array,
@@ -513,12 +566,95 @@ function fitPiece(
   opts: FitOptions,
   ws: FitWorkspace,
   out: Span[],
-): void {
+): boolean {
   if (isStraightPiece(sx, sy, ox, oy, a, b, opts)) {
     out.push(lineSpan(a, b, t1x, t1y, t2x, t2y));
-    return;
+    return false;
   }
+  if (opts.exactShapes && exactShape(sx, sy, ox, oy, a, b, false, opts, ws, out)) return true;
   fitCubicRange(sx, sy, ox, oy, a, b, t1x, t1y, t2x, t2y, opts.tolerance, ws, out);
+  return false;
+}
+
+/**
+ * T125a — Formes exactes. Tronçon [a, b] (ou île sans coin de n = b + 1 points cycliques,
+ * `closed`) posé sur le cercle de Kåsa de ses points ORIGINAUX, retenu si ces points en restent
+ * à moins de `tolerance`, les points LISSÉS à ≤ `lineTolerance` (comme `isLine` ; ce test écarte
+ * l'arc de compromis, bout droit puis courbe, que les seuls points originaux laisseraient
+ * passer ; hors des `EXACT_END_WINDOW` points des bouts d'un tronçon, où la moyenne est
+ * tronquée), le rayon ≥ `EXACT_MIN_RADIUS` et le balayage ≥ `EXACT_MIN_SWEEP`. Émis en cubiques
+ * exactes de ≤ 90° tangentes entre elles (`arcCubics`, F1 sur chacune), poussées dans `out`
+ * (nœuds posés par `ex`/`ey`) ; faux (rien poussé) sinon.
+ *
+ * Arc : les extrémités A, B (sommets partagés ou coins, recalés compris) ne bougent pas ; la
+ * première cubique part de A au lieu de sa projection sur le cercle, la dernière arrive en B,
+ * poignées inchangées : l'écart s'éteint en (1 − t)³ (décaler la poignée d'autant, en
+ * (1 − t)³ + 3t(1 − t)², échouait F1 sur la couronne de l'accueil). Île : 4 cubiques de 90° (kappa = 4(√2−1)/3), nœuds aux quatre extrema, départ
+ * à l'angle 0 (point le plus à droite, comme le cercle d'Illustrator ; l'ancre « diagonale » de
+ * T08 ne servait qu'à l'ajustement de Schneider), sens de la chaîne gardé.
+ */
+function exactShape(
+  sx: Float64Array,
+  sy: Float64Array,
+  ox: Float64Array,
+  oy: Float64Array,
+  a: number,
+  b: number,
+  closed: boolean,
+  opts: FitOptions,
+  ws: FitWorkspace,
+  out: Span[],
+): boolean {
+  const tol = opts.tolerance;
+  const cub = ws.buffer(BARC, 71);
+  const c = cub.subarray(64);
+  if (!exactCircle(sx, sy, ox, oy, a, b, opts, c)) return false;
+  const cx = c[0]!;
+  const cy = c[1]!;
+  const tau = ws.buffer(BTAU, b + 2);
+  c[3] = sx[a]!;
+  c[4] = sy[a]!;
+  c[5] = sx[b]!;
+  c[6] = sy[b]!;
+  let t0 = Math.atan2(c[4] - cy, c[3] - cx);
+  // Arc : progression des points LISSÉS (de A à B exactement), qui ordonne aussi les originaux.
+  let sweep = angularProgress(sx, sy, a, b, cx, cy, t0, tau);
+  let px = ox;
+  let py = oy;
+  if (closed) {
+    // Île : sens, puis polyligne déroulée d'un tour (fermeture comprise) depuis le premier point
+    // qui suit l'angle 0 : progressions dans [0, 2π[.
+    const sign = Math.sign(sweep - tau[0]!);
+    sweep = TAU * sign;
+    let best = Infinity;
+    let i0 = 0;
+    for (let i = a; i <= b; i++) {
+      const e = (sign * Math.atan2(oy[i]! - cy, ox[i]! - cx) + TAU) % TAU;
+      if (e < best) {
+        best = e;
+        i0 = i;
+      }
+    }
+    [px, py] = unroll(ox, oy, b + 1, i0, ws);
+    t0 = 0;
+    angularProgress(px, py, 0, b + 1, cx, cy, t0, tau);
+    c[3] = c[5] = cx + c[2]!;
+    c[4] = c[6] = cy;
+  } else if (!(Math.abs(sweep) >= EXACT_MIN_SWEEP && Math.abs(sweep) < TAU)) return false;
+  // Ouverture des cubiques : 90° pour un cercle (4 nœuds aux extrema) ; pour un arc, réduite
+  // au-delà de `EXACT_ARC_REF` (écart d'une cubique au cercle ∝ r·φ⁶), au plus 8 cubiques.
+  const f = closed ? 1 : Math.min(1, Math.max(0.5, (EXACT_ARC_REF / c[2]!) ** (1 / 6)));
+  // Île : la polyligne se referme sur son premier point (b + 1).
+  const polyEnd = closed ? b + 1 : b;
+  const k = arcCubics(px, py, a, b, polyEnd, tau, c, t0, sweep, (TAU / 4) * f, tol, ws, cub);
+  for (let j = 0; j < k; j++) {
+    const s = lineSpan(a, b, 0, 0, 0, 0);
+    setCubic(s, cub.subarray(8 * j));
+    s.ex = cub[8 * j + 6]!;
+    s.ey = cub[8 * j + 7]!;
+    out.push(s);
+  }
+  return k > 0;
 }
 
 /** Remplace deux morceaux adjacents par un seul (ligne ou cubique) s'il tient dans la tolérance. */
@@ -532,25 +668,14 @@ function tryMerge(
   opts: FitOptions,
   ws: FitWorkspace,
 ): Span | null {
-  const a = p.i0;
-  const b = q.i1;
-  if (isLine(sx, sy, ox, oy, a, b, opts)) return lineSpan(a, b, p.t1x, p.t1y, q.t2x, q.t2y);
-  const err = fitSingleCubic(sx, sy, ox, oy, a, b, p.t1x, p.t1y, q.t2x, q.t2y, opts.tolerance, ws);
-  if (!(err < opts.tolerance)) return null;
-  const c = ws.best;
-  return {
-    i0: a,
-    i1: b,
-    cubic: true,
-    c1x: c[2]!,
-    c1y: c[3]!,
-    c2x: c[4]!,
-    c2y: c[5]!,
-    t1x: p.t1x,
-    t1y: p.t1y,
-    t2x: q.t2x,
-    t2y: q.t2y,
-  };
+  const s = lineSpan(p.i0, q.i1, p.t1x, p.t1y, q.t2x, q.t2y);
+  if (isLine(sx, sy, ox, oy, s.i0, s.i1, opts)) return s;
+  const t = opts.tolerance;
+  if (!(fitSingleCubic(sx, sy, ox, oy, s.i0, s.i1, s.t1x, s.t1y, s.t2x, s.t2y, t, ws) < t)) {
+    return null;
+  }
+  setCubic(s, ws.best);
+  return s;
 }
 
 /** Erreur (points lissés) d'un morceau cubique tel quel. */
@@ -569,14 +694,6 @@ function spanError(s: Span, sx: Float64Array, sy: Float64Array, ws: FitWorkspace
   c[7] = sy[s.i1]!;
   measureError(c, sx, sy, s.i0, s.i1, ws.u, ws);
   return ws.err;
-}
-
-function setCubic(s: Span, c: Float64Array): void {
-  s.cubic = true;
-  s.c1x = c[2]!;
-  s.c1y = c[3]!;
-  s.c2x = c[4]!;
-  s.c2y = c[5]!;
 }
 
 /**
@@ -738,8 +855,8 @@ function toFitted(
           c1y: s.c1y,
           c2x: s.c2x,
           c2y: s.c2y,
-          x: sx[s.i1]!,
-          y: sy[s.i1]!,
+          x: s.ex ?? sx[s.i1]!,
+          y: s.ey ?? sy[s.i1]!,
         }
       : { kind: 'line', x: sx[s.i1]!, y: sy[s.i1]! },
   );
