@@ -1,8 +1,15 @@
 # @homotope/engine
 
+This is the engine of [Homotope](https://homotope.app), an image vectorizer that runs in the
+browser: nothing is uploaded. Try it in the [workshop](https://homotope.app/atelier) (free, no
+account needed for SVG and PNG).
+
 Raster-to-vector engine in pure TypeScript: turns a PNG or JPEG (any RGBA pixel buffer) into a
-clean **SVG**, and from that SVG into **DXF**, **PDF** or **EPS**. It is the engine behind
-[Homotope](https://homotope.app), an online image vectorizer, released under the MIT license.
+clean **SVG**, and from that SVG into **DXF**, **PDF** or **EPS**. Released under the MIT license.
+
+**What this package is not**: it has no editor, no server, no REST API, no MCP server and no
+printer checks; those live in the hosted service. The npm package is frozen at 0.2.0: what it
+contains is complete and usable on its own.
 
 - **No DOM, no runtime dependencies.** The core runs unchanged in a Web Worker, in the main
   thread and in Node. Pixel data stays on the machine: nothing is uploaded anywhere.
